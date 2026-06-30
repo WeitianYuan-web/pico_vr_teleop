@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pico WebXR 采集 (Three.js WebSocket版)</title>
+    <style>
+        body {
+            font-family: "Segoe UI", sans-serif;
+            margin: 0;
+            overflow: hidden; /* 隐藏滚动条，让 Canvas 铺满全屏 */
+            background: #000;
+            color: #e0e0e0;
+        }
+        #xr-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1; /* 置于底层 */
+        }
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2; /* 浮在 3D 画面上 */
+            pointer-events: none; /* 让鼠标可以穿透到后面，但面板需恢复点击 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 20px;
+            overflow-y: auto;
+        }
+        .panel {
+            pointer-events: auto; /* 恢复面板的鼠标响应 */
+            width: 90%;
+            max-width: 900px;
+            background: rgba(22, 33, 62, 0.85);
+            backdrop-filter: blur(8px);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        h1 { text-align: center; color: #4CAF50; margin-top: 0; }
+        .btn-row { text-align: center; margin-bottom: 20px; }
+        button {
+            font-size: 18px;
+            padding: 12px 24px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 8px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            transition: all 0.2s;
+        }
+        button:hover { background-color: #45a049; transform: scale(1.02); }
+        button.toggle-off { background-color: #888; }
+        button.danger { background-color: #e94560; }
+        #status {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 15px;
+            padding: 8px;
+            border-radius: 6px;
+            background: rgba(15, 52, 96, 0.8);
+        }
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .card { background: rgba(15, 52, 96, 0.6); border-radius: 8px; padding: 15px; }
+        .card h3 { margin: 0 0 10px; color: #4CAF50; border-bottom: 1px solid rgba(42, 74, 127, 0.5); padding-bottom: 6px; }
+        .row { display: flex; justify-content: space-between; font-family: monospace; font-size: 13px; margin: 4px 0; }
+        .row span:last-child { color: #ffd369; }
+        .bar-bg { background: rgba(0,0,0,0.3); border-radius: 4px; height: 12px; overflow: hidden; margin-top: 2px; }
+        .bar-fill { background: #4CAF50; height: 100%; width: 0%; transition: width 0.05s; }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.3); margin: 2px; font-size: 11px; }
+        .badge.on { background: #4CAF50; color: #fff; }
+    </style>
+    <!-- 使用 Import Map 引入现代版 Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <canvas id="xr-canvas"></canvas>
+    
+    <div class="ui-layer">
+        <div class="panel">
+            <h1>Pico WebXR 采集 (Three.js)</h1>
+            <div class="btn-row">
+                <button id="enter-vr">进入 VR (WebXR)</button>
+                <button id="toggle-send">数据发送: 开</button>
+                <button id="exit-vr" class="danger">退出 VR</button>
+            </div>
+            <div id="status">初始化中...</div>
+
+            <div class="data-grid">
+                <div class="card">
+                    <h3>头显 Head</h3>
+                    <div class="row"><span>位置 XYZ</span><span id="head-pos">-</span></div>
+                    <div class="row"><span>旋转 Quat</span><span id="head-rot">-</span></div>
+                </div>
+                <div class="card">
+                    <h3>发送统计</h3>
+                    <div class="row"><span>发送帧数</span><span id="stat-frames">0</span></div>
+                    <div class="row"><span>发送频率</span><span id="stat-fps">0 Hz</span></div>
+                </div>
+                <div class="card" id="left-card">
+                    <h3>左手柄 Left</h3>
+                    <div class="row"><span>位置 XYZ</span><span id="left-pos">-</span></div>
+                    <div class="row"><span>扳机 Trigger</span><span id="left-trigger-v">0.00</span></div>
+                    <div class="bar-bg"><div class="bar-fill" id="left-trigger-bar"></div></div>
+                    <div class="row"><span>握把 Grip</span><span id="left-grip-v">0.00</span></div>
+                    <div class="bar-bg"><div class="bar-fill" id="left-grip-bar"></div></div>
+                    <div class="row"><span>摇杆 Axes</span><span id="left-axes">-</span></div>
+                    <div id="left-buttons" style="margin-top:8px;"></div>
+                </div>
+                <div class="card" id="right-card">
+                    <h3>右手柄 Right</h3>
+                    <div class="row"><span>位置 XYZ</span><span id="right-pos">-</span></div>
+                    <div class="row"><span>扳机 Trigger</span><span id="right-trigger-v">0.00</span></div>
+                    <div class="bar-bg"><div class="bar-fill" id="right-trigger-bar"></div></div>
+                    <div class="row"><span>握把 Grip</span><span id="right-grip-v">0.00</span></div>
+                    <div class="bar-bg"><div class="bar-fill" id="right-grip-bar"></div></div>
+                    <div class="row"><span>摇杆 Axes</span><span id="right-axes">-</span></div>
+                    <div id="right-buttons" style="margin-top:8px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模块化脚本加载 Three.js -->
+    <script type="module">
+        import * as THREE from 'three';
+
+        // 1. WebSocket 网络通信模块
+        const ws = new WebSocket('wss://' + window.location.hostname + ':8081');
+        const statusEl = document.getElementById('status');
+        
+        let sendEnabled = true;
+        let seq = 0, frameCount = 0, fpsCounter = 0;
+        let lastFpsTime = performance.now();
+        let lastSendTime = 0;
+        const TARGET_FPS = 45;
+        const SEND_INTERVAL = 1000 / TARGET_FPS;
+        const f3 = (val) => Math.round(val * 1000) / 1000;
+
+        ws.onopen = () => { statusEl.innerText = "WebSocket 已连接，请点击进入 VR"; };
+        ws.onclose = () => { statusEl.innerText = "WebSocket 已断开"; };
+        ws.onerror = () => { statusEl.innerText = "WebSocket 错误，请检查 PC 端服务是否启动"; };
+
+        // 2. Three.js 场景搭建模块
+        const canvas = document.getElementById('xr-canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true; // 【核心】一键开启 WebXR
+        renderer.xr.setReferenceSpaceType('local-floor'); // 指定参考空间
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0f1a); // 深邃背景
+        scene.fog = new THREE.Fog(0x0a0f1a, 5, 20);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 1.6, 3); // 2D 预览视角
+
+        // 光照系统
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
+
+        // 环境辅助：无限延伸的炫酷网格
+        const gridHelper = new THREE.GridHelper(40, 80, 0x4CAF50, 0x2a4a7f);
+        scene.add(gridHelper);
+
+        // 建立手柄指示器（发光盒子）
+        const ctrlGeo = new THREE.BoxGeometry(0.05, 0.05, 0.12);
+        const leftMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x3b82f6, emissiveIntensity: 0 });
+        const rightMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 0 });
+        
+        const leftMesh = new THREE.Mesh(ctrlGeo, leftMat);
+        const rightMesh = new THREE.Mesh(ctrlGeo, rightMat);
+        leftMesh.visible = false;
+        rightMesh.visible = false;
+        scene.add(leftMesh);
+        scene.add(rightMesh);
+
+        // 窗口尺寸自适应
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // 3. UI 按钮控制逻辑
+        document.getElementById('enter-vr').addEventListener('click', async () => {
+            if (!navigator.xr) {
+                alert('您的浏览器不支持 WebXR！');
+                return;
+            }
+            try {
+                // 手动接管会话创建，保留我们自己的 UI
+                const session = await navigator.xr.requestSession('immersive-vr', {
+                    optionalFeatures: ['local-floor', 'bounded-floor']
+                });
+                session.addEventListener('end', () => { statusEl.innerText = "已退出 VR"; });
+                await renderer.xr.setSession(session);
+                statusEl.innerText = "VR 运行中！Three.js 场景渲染开启。";
+            } catch (e) {
+                alert("进入 VR 失败: " + e.message);
+            }
+        });
+
+        document.getElementById('exit-vr').addEventListener('click', () => {
+            const session = renderer.xr.getSession();
+            if (session) session.end();
+        });
+
+        document.getElementById('toggle-send').addEventListener('click', (e) => {
+            sendEnabled = !sendEnabled;
+            e.target.innerText = "数据发送: " + (sendEnabled ? "开" : "关");
+            e.target.className = sendEnabled ? "" : "toggle-off";
+        });
+
+        function updateControllerUI(side, ctrl) {
+            document.getElementById(side + '-pos').innerText = `${ctrl.x.toFixed(2)}, ${ctrl.y.toFixed(2)}, ${ctrl.z.toFixed(2)}`;
+            document.getElementById(side + '-trigger-v').innerText = ctrl.trigger.toFixed(2);
+            document.getElementById(side + '-trigger-bar').style.width = (ctrl.trigger * 100) + '%';
+            document.getElementById(side + '-grip-v').innerText = ctrl.grip.toFixed(2);
+            document.getElementById(side + '-grip-bar').style.width = (ctrl.grip * 100) + '%';
+            document.getElementById(side + '-axes').innerText = ctrl.axes.length ? ctrl.axes.map(a => a.toFixed(2)).join(', ') : '-';
+            const btnHtml = ctrl.buttons.map((b, i) => `<span class="badge ${b.pressed ? 'on' : ''}">B${i}:${b.value.toFixed(1)}</span>`).join('');
+            document.getElementById(side + '-buttons').innerHTML = btnHtml;
+        }
+
+        // 4. Three.js 的统一渲染与数据循环
+        // WebXR 下必须使用 renderer.setAnimationLoop
+        renderer.setAnimationLoop((time, frame) => {
+            renderer.render(scene, camera);
+
+            if (!frame) return; // 未进入 VR 状态
+
+            const session = renderer.xr.getSession();
+            const xrRefSpace = renderer.xr.getReferenceSpace(); // Three.js 会自动帮我们获取
+            if (!session || !xrRefSpace) return;
+
+            const now = performance.now();
+            const pose = frame.getViewerPose(xrRefSpace);
+            if (!pose) return;
+
+            // 构造数据
+            const p = pose.transform.position;
+            const o = pose.transform.orientation;
+            const data = {
+                seq: seq++,
+                time: f3(time),
+                sent_time: f3(now),
+                head: { x: f3(p.x), y: f3(p.y), z: f3(p.z), qx: f3(o.x), qy: f3(o.y), qz: f3(o.z), qw: f3(o.w) },
+                controllers: []
+            };
+
+            // 更新头显 UI
+            document.getElementById('head-pos').innerText = `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`;
+            document.getElementById('head-rot').innerText = `${o.x.toFixed(2)}, ${o.y.toFixed(2)}, ${o.z.toFixed(2)}, ${o.w.toFixed(2)}`;
+
+            let leftFound = false, rightFound = false;
+
+            // 提取手柄数据并更新 3D 模型位置
+            for (const source of session.inputSources) {
+                if (!source.gripSpace) continue;
+                const sp = frame.getPose(source.gripSpace, xrRefSpace);
+                if (!sp) continue;
+
+                const cp = sp.transform.position;
+                const co = sp.transform.orientation;
+                const gp = source.gamepad;
+                
+                const trigger = gp && gp.buttons[0] ? gp.buttons[0].value : 0;
+                const grip = gp && gp.buttons[1] ? gp.buttons[1].value : 0;
+                const axes = gp ? Array.from(gp.axes).map(f3) : [];
+                const buttons = gp ? gp.buttons.map(b => ({ pressed: b.pressed, value: f3(b.value) })) : [];
+
+                const ctrlData = {
+                    handedness: source.handedness,
+                    x: f3(cp.x), y: f3(cp.y), z: f3(cp.z),
+                    qx: f3(co.x), qy: f3(co.y), qz: f3(co.z), qw: f3(co.w),
+                    trigger: f3(trigger), grip: f3(grip), axes, buttons
+                };
+                data.controllers.push(ctrlData);
+
+                // 更新 3D 场景中的手柄方块
+                if (source.handedness === 'left') {
+                    leftFound = true;
+                    leftMesh.visible = true;
+                    leftMesh.position.set(cp.x, cp.y, cp.z);
+                    leftMesh.quaternion.set(co.x, co.y, co.z, co.w);
+                    leftMat.emissiveIntensity = trigger * 0.8; // 扳机扣动发光
+                    updateControllerUI('left', ctrlData);
+                } else if (source.handedness === 'right') {
+                    rightFound = true;
+                    rightMesh.visible = true;
+                    rightMesh.position.set(cp.x, cp.y, cp.z);
+                    rightMesh.quaternion.set(co.x, co.y, co.z, co.w);
+                    rightMat.emissiveIntensity = trigger * 0.8;
+                    updateControllerUI('right', ctrlData);
+                }
+            }
+            if (!leftFound) leftMesh.visible = false;
+            if (!rightFound) rightMesh.visible = false;
+
+            // 限频发送网络数据 (Anti-Buffer-Bloat)
+            if (sendEnabled && ws.readyState === WebSocket.OPEN && (now - lastSendTime) >= SEND_INTERVAL) {
+                if (ws.bufferedAmount > 512) {
+                    console.warn("网络拥堵，丢帧");
+                } else {
+                    ws.send(JSON.stringify(data));
+                    frameCount++;
+                    fpsCounter++;
+                    document.getElementById('stat-frames').innerText = frameCount;
+                    lastSendTime = now;
+                }
+                if (now - lastFpsTime >= 1000) {
+                    document.getElementById('stat-fps').innerText = fpsCounter + ' Hz';
+                    fpsCounter = 0;
+                    lastFpsTime = now;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
