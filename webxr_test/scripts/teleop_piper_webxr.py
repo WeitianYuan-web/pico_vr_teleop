@@ -42,9 +42,9 @@ ROTATION_SCALE = 1.0
 CMD_RATE_HZ = 100                    # 控制频率 Hz
 MAX_JOINT_STEP_RAD = 0.03            # 每步最大关节增量 rad（100 Hz × 0.03 ≈ 3 rad/s 上限）
 MAX_POS_SPEED = 0.8                  # 笛卡尔位置速度上限 m/s
-MAX_ROT_SPEED = 1.8                  # 笛卡尔姿态速度上限 rad/s
 JOINT_INTERP_ALPHA = 0.75            # 关节命令插值系数（越大越跟手）
-INIT_JOINTS = [0.0, 0.35, -0.35, 0.0, 0.0, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
+ELBOW_WEIGHT = 0.02                  # 肘部偏好任务权重（0 关闭）
+INIT_JOINTS = [0.0, 1.8, -0.9, 0.0, 0.5, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
 INIT_JOINT_TIMEOUT = 6.0
 INIT_JOINT_SETTLE = 0.5
 INIT_ABS_X = None  # 例如 0.25；None 表示保持当前
@@ -58,8 +58,6 @@ HOME_COOLDOWN_S = 2.0
 TCP_OFFSET_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, np.pi / 2]
 # 姿态绝对控制：目标朝向偏离初始 ee 朝向的最大角度（朝前保护）
 MAX_ROT_RANGE_RAD = np.radians(60)
-# 手柄旋转轴符号修正：pitch(Y) 保持，roll(X) / yaw(Z) 反向
-ROT_AXIS_SIGN = np.array([-1.0, -1.0, -1.0], dtype=float)
 
 
 class EMAFilter:
@@ -168,14 +166,6 @@ def apply_delta_pose(
         rot_delta = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     target_rot = quat_multiply_wxyz(rot_delta, source_rot_wxyz)
     return target_pos, target_rot
-
-
-def clamp_angle_axis(delta_rot: np.ndarray, max_angle: float) -> np.ndarray:
-    """限制单步最大旋转角，避免姿态突变。"""
-    angle = np.linalg.norm(delta_rot)
-    if angle <= max_angle or angle < 1e-9:
-        return delta_rot
-    return delta_rot * (max_angle / angle)
 
 
 def quat_wxyz_to_matrix(quat: np.ndarray) -> np.ndarray:
@@ -303,7 +293,9 @@ class WebXRPiperPlacoTeleop:
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         平移：增量控制（相对 grip 接合时的参考位置）。
-        姿态：绝对控制（grip 接合时记录 ctrl→ee 偏移，之后直接跟手）。
+        姿态：绝对控制（grip 接合时记录 controller 参考姿态，后续按相对四元数映射）。
+        该实现遵循行业通用做法：使用 q_rel = q_ref^-1 * q_cur，
+        即在手柄局部轴定义下计算相对旋转，再叠加到 ref_ee 姿态。
         返回 (delta_xyz, abs_target_quat_wxyz)。
         """
         controller_xyz, controller_quat_wxyz = self._transform_xr_controller(vr_pos, qx, qy, qz, qw)
@@ -318,15 +310,23 @@ class WebXRPiperPlacoTeleop:
         # 平移：增量
         delta_xyz = arm.pos_filter.update(controller_xyz - arm.ref_controller_xyz) * SCALE_FACTOR
 
-        # 姿态：绝对控制，但用 grip 接合时刻的控制器姿态做零点。
-        # 用户视角下 pitch 方向正确，roll/yaw 方向相反，因此翻转角轴 X/Z 分量。
-        ctrl_delta = quat_diff_as_angle_axis(arm.ref_controller_quat_wxyz, controller_quat_wxyz)
-        ctrl_delta = ctrl_delta * ROT_AXIS_SIGN * self.rotation_scale
+        # 姿态：绝对控制（局部相对四元数法）
+        # q_rel 表示“从 grip 接合参考姿态到当前姿态”的相对旋转（手柄局部轴语义）
+        q_rel = quat_multiply_wxyz(quat_inverse_wxyz(arm.ref_controller_quat_wxyz), controller_quat_wxyz)
+        norm_rel = np.linalg.norm(q_rel)
+        if norm_rel > 1e-12:
+            q_rel = q_rel / norm_rel
+        else:
+            q_rel = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+        # rotation_scale 仍可用于姿态灵敏度调节（1.0 = 真实等比例跟随）
+        rel_aa = quaternion_to_angle_axis(q_rel)
+        rel_aa = rel_aa * self.rotation_scale
         _, raw_q = apply_delta_pose(
             np.zeros(3, dtype=float),
             arm.ref_ee_quat_wxyz,
             np.zeros(3, dtype=float),
-            ctrl_delta,
+            rel_aa,
         )
         # 保持四元数半球一致，再做 EMA 平滑
         prev_q = arm.rot_filter.value
@@ -453,7 +453,8 @@ class WebXRPiperPlacoTeleop:
                 ee_frame="link6",
                 dt=1.0 / CMD_RATE_HZ,
                 position_weight=1.0,
-                orientation_weight=0.1,
+                orientation_weight=0.05,
+                elbow_weight=ELBOW_WEIGHT,
                 manipulability_weight=1e-2,
                 joints_regularization_weight=1e-4,
             )
@@ -634,7 +635,12 @@ class WebXRPiperPlacoTeleop:
                         "hold-a": "平移(Grip) + 旋转(Grip+A)",
                         "off": "仅平移",
                     }.get(self.rotation_mode, "平移+旋转")
-                    print(f"[Network] ✅ 已连接，双臂模式：按住 Grip 开始控制（{rot_hint}），按 B 回到各自初始位置")
+                    mode_tag = (
+                        "双臂模式"
+                        if len(self.active_hands) == 2
+                        else f"单臂模式({self.active_hands[0]})"
+                    )
+                    print(f"[Network] ✅ 已连接，{mode_tag}：按住 Grip 开始控制（{rot_hint}），按 B 回到初始位置")
                     control_task = asyncio.create_task(self.control_loop())
                     try:
                         while True:

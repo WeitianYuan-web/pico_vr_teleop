@@ -95,9 +95,9 @@
         <div class="panel">
             <h1>Pico WebXR 采集 (Three.js)</h1>
             <div class="btn-row">
-                <button id="enter-vr">进入 VR (WebXR)</button>
+                <button id="enter-ar">进入透视 AR (Passthrough)</button>
                 <button id="toggle-send">数据发送: 开</button>
-                <button id="exit-vr" class="danger">退出 VR</button>
+                <button id="exit-vr" class="danger">退出 AR</button>
             </div>
             <div id="status">初始化中...</div>
 
@@ -152,7 +152,7 @@
         const SEND_INTERVAL = 1000 / TARGET_FPS;
         const f3 = (val) => Math.round(val * 1000) / 1000;
 
-        ws.onopen = () => { statusEl.innerText = "WebSocket 已连接，请点击进入 VR"; };
+        ws.onopen = () => { statusEl.innerText = "WebSocket 已连接，请点击进入透视 AR"; };
         ws.onclose = () => { statusEl.innerText = "WebSocket 已断开"; };
         ws.onerror = () => { statusEl.innerText = "WebSocket 错误，请检查 PC 端服务是否启动"; };
 
@@ -165,21 +165,72 @@
         renderer.xr.setReferenceSpaceType('local-floor'); // 指定参考空间
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0a0f1a); // 深邃背景
-        scene.fog = new THREE.Fog(0x0a0f1a, 5, 20);
+        scene.background = new THREE.Color(0x101820);
+        scene.fog = new THREE.Fog(0x101820, 6, 24);
 
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.set(0, 1.6, 3); // 2D 预览视角
 
-        // 光照系统
-        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(5, 10, 5);
-        scene.add(dirLight);
+        // 光照系统（环境感更强）
+        scene.add(new THREE.HemisphereLight(0xdde7ff, 0x1c1f2a, 0.9));
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+        keyLight.position.set(3, 6, 2);
+        scene.add(keyLight);
+        const fillLight = new THREE.DirectionalLight(0x9cc4ff, 0.35);
+        fillLight.position.set(-3, 3, -4);
+        scene.add(fillLight);
 
-        // 环境辅助：无限延伸的炫酷网格
-        const gridHelper = new THREE.GridHelper(40, 80, 0x4CAF50, 0x2a4a7f);
+        // 近似房间环境（地面 + 墙面 + 天花）
+        const roomSize = 8;
+        const half = roomSize / 2;
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x1f2a35, roughness: 0.95, metalness: 0.05 });
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x243341, roughness: 0.92, metalness: 0.02, side: THREE.BackSide });
+        const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x18222d, roughness: 1.0, metalness: 0.0 });
+
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = 0;
+        scene.add(floor);
+
+        const room = new THREE.Mesh(new THREE.BoxGeometry(roomSize, 3.4, roomSize), wallMat);
+        room.position.y = 1.7;
+        scene.add(room);
+
+        const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), ceilingMat);
+        ceiling.rotation.x = Math.PI / 2;
+        ceiling.position.y = 3.39;
+        scene.add(ceiling);
+
+        // 参考物：帮助判断空间和移动
+        const gridHelper = new THREE.GridHelper(roomSize, 24, 0x4caf50, 0x2f4558);
+        gridHelper.position.y = 0.001;
         scene.add(gridHelper);
+
+        const originGeo = new THREE.SphereGeometry(0.04, 18, 18);
+        const originMat = new THREE.MeshStandardMaterial({ color: 0xffd369, emissive: 0x332200, emissiveIntensity: 0.45 });
+        const originMark = new THREE.Mesh(originGeo, originMat);
+        originMark.position.set(0, 0.04, 0);
+        scene.add(originMark);
+
+        // 超长坐标轴（近似“无限延伸”）
+        const AXIS_LENGTH = 1000;
+        function makeAxisLine(start, end, color) {
+            const geometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(...start),
+                new THREE.Vector3(...end),
+            ]);
+            const material = new THREE.LineBasicMaterial({ color });
+            return new THREE.Line(geometry, material);
+        }
+
+        const infiniteAxis = new THREE.Group();
+        infiniteAxis.add(makeAxisLine([-AXIS_LENGTH, 0, 0], [AXIS_LENGTH, 0, 0], 0xff3b30)); // X 红
+        infiniteAxis.add(makeAxisLine([0, -AXIS_LENGTH, 0], [0, AXIS_LENGTH, 0], 0x34c759)); // Y 绿
+        infiniteAxis.add(makeAxisLine([0, 0, -AXIS_LENGTH], [0, 0, AXIS_LENGTH], 0x0a84ff)); // Z 蓝
+        infiniteAxis.position.set(0, 0.02, 0);
+        scene.add(infiniteAxis);
+        const envObjects = [floor, room, ceiling, gridHelper];
+        const overlayObjects = [originMark, infiniteAxis];
 
         // 建立手柄指示器（发光盒子）
         const ctrlGeo = new THREE.BoxGeometry(0.05, 0.05, 0.12);
@@ -201,27 +252,46 @@
         });
 
         // 3. UI 按钮控制逻辑
-        document.getElementById('enter-vr').addEventListener('click', async () => {
+        function setEnvironmentVisible(visible) {
+            envObjects.forEach(obj => { obj.visible = visible; });
+            overlayObjects.forEach(obj => { obj.visible = true; });
+            // 透视模式下让相机画面成为背景
+            scene.background = visible ? new THREE.Color(0x101820) : null;
+            scene.fog = visible ? new THREE.Fog(0x101820, 6, 24) : null;
+        }
+
+        async function startARSession() {
             if (!navigator.xr) {
                 alert('您的浏览器不支持 WebXR！');
                 return;
             }
             try {
-                // 手动接管会话创建，保留我们自己的 UI
-                const session = await navigator.xr.requestSession('immersive-vr', {
+                const session = await navigator.xr.requestSession('immersive-ar', {
                     optionalFeatures: ['local-floor', 'bounded-floor']
                 });
-                session.addEventListener('end', () => { statusEl.innerText = "已退出 VR"; });
+                session.addEventListener('end', () => { statusEl.innerText = "已退出 AR"; });
                 await renderer.xr.setSession(session);
-                statusEl.innerText = "VR 运行中！Three.js 场景渲染开启。";
+                setEnvironmentVisible(false);
+                const blend = session.environmentBlendMode || 'unknown';
+                statusEl.innerText = `透视 AR 运行中 (blend=${blend})，坐标系已叠加`;
             } catch (e) {
-                alert("进入 VR 失败: " + e.message);
+                alert(`进入 immersive-ar 失败: ${e.message}`);
             }
+        }
+
+        document.getElementById('enter-ar').addEventListener('click', async () => {
+            const supported = await navigator.xr?.isSessionSupported?.('immersive-ar');
+            if (!supported) {
+                alert('当前 PICO 浏览器不支持 immersive-ar 透视模式。');
+                return;
+            }
+            await startARSession();
         });
 
         document.getElementById('exit-vr').addEventListener('click', () => {
             const session = renderer.xr.getSession();
             if (session) session.end();
+            setEnvironmentVisible(true);
         });
 
         document.getElementById('toggle-send').addEventListener('click', (e) => {

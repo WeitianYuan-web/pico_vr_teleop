@@ -1,6 +1,6 @@
 # WebXR -> Piper 遥操作说明（Placo QP 版）
 
-本文档对应脚本：`webxr_test/scripts/teleop_piper_webxr.py`  
+本文档对应脚本：`pico_vr_teleop/webxr_test/scripts/teleop_piper_webxr.py`  
 目标：用 PICO WebXR 手柄遥操作 Piper 机械臂（`move_j`），支持单臂/双臂，并保证稳定性与安全性。
 
 ---
@@ -41,13 +41,15 @@
 | 维度 | 方式 | 说明 |
 |------|------|------|
 | **平移** | 增量 | Grip 接合时记录 `ref_ee_xyz`，手柄位移增量叠加 |
-| **姿态** | 绝对 | Grip 接合时记录 `ctrl→ee` 校准偏移，之后直接跟手 |
+| **姿态** | 绝对 | Grip 接合时记录控制器参考姿态，后续按相对参考的角轴增量映射到 ee |
 
 姿态绝对控制流程：
 
-1. Grip 接合瞬间：`ref_ctrl_to_ee_quat = ee_quat × inv(ctrl_quat)`
-2. 每周期：`target_quat = ref_ctrl_to_ee_quat × current_ctrl_quat`
-3. **朝前保护**：目标姿态限定在启动时 ee 初始朝向的 **60°** 以内（`MAX_ROT_RANGE_RAD`）
+1. Grip 接合瞬间：记录控制器参考姿态 `ref_controller_quat`
+2. 每周期：`ctrl_delta = angle_axis(ref_controller_quat -> current_ctrl_quat)`
+3. 轴向符号修正：`ctrl_delta = ctrl_delta * ROT_AXIS_SIGN`
+4. 绝对姿态目标：`target_quat = apply_delta(ref_ee_quat, ctrl_delta)`
+5. **朝前保护**：目标姿态限定在启动时 ee 初始朝向的 **60°** 以内（`MAX_ROT_RANGE_RAD`）
 
 ---
 
@@ -56,8 +58,8 @@
 ### 2.1 启动 WebXR 数据服务
 
 ```bash
-cd /home/b0106/pico_test/webxr_test
-python server.py
+cd /home/b0106/pico_test/pico_vr_teleop/webxr_test
+/home/b0106/pico_test/pico_vr_teleop/.venv/bin/python server.py
 ```
 
 ### 2.2 PICO 打开采集页并进入 VR
@@ -72,36 +74,37 @@ https://<你的电脑IP>:8000/index.html
 
 ### 2.3 启动机械臂控制脚本
 
-推荐使用项目内启动脚本（会固定使用 `pyAgxArm/.venv`）：
+推荐使用项目内启动脚本（会固定使用 `pico_vr_teleop/.venv`）：
 
 ```bash
-cd /home/b0106/pico_test/webxr_test
-./run_teleop_piper_webxr.sh
+cd /home/b0106/pico_test/pico_vr_teleop
+./scripts/run_vr_teleop.sh
 ```
 
 #### 常用启动示例
 
 ```bash
 # 单右臂（一个 CAN 口）
-./run_teleop_piper_webxr.sh --hands right --right-can-port can0
+./scripts/run_vr_teleop.sh --hands right --right-can-port can0
 
 # 单左臂
-./run_teleop_piper_webxr.sh --hands left --left-can-port can0
+./scripts/run_vr_teleop.sh --hands left --left-can-port can0
 
 # 双臂（两个 CAN 口）
-./run_teleop_piper_webxr.sh --hands both --left-can-port can0 --right-can-port can1
+./scripts/run_vr_teleop.sh --hands both --left-can-port can0 --right-can-port can1
 
 # 带 TCP 偏移（ee 帧 Z 轴 90° 为默认，可覆盖）
-./run_teleop_piper_webxr.sh --hands right --tcp-offset 0,0,0,0,0,1.5708
+./scripts/run_vr_teleop.sh --hands right --tcp-offset 0,0,0,0,0,1.5708
 ```
 
 手工运行（需先激活虚拟环境）：
 
 ```bash
-cd /home/b0106/pico_test/pyAgxArm
+cd /home/b0106/pico_test/pico_vr_teleop
 source .venv/bin/activate
-pip install -r requirements-teleop.txt
-cd /home/b0106/pico_test/webxr_test
+pip install -r pyAgxArm/requirements-teleop.txt
+pip install -e pyAgxArm
+cd webxr_test
 python scripts/teleop_piper_webxr.py --hands right --right-can-port can0
 ```
 
@@ -159,23 +162,23 @@ controllers[].{grip,trigger,x,y,z,qx,qy,qz,qw,buttons}
 
 ### 离合控制流程
 
-1. 按下 `grip`：记录机械臂末端参考位姿 `ref_ee` 与 `ctrl→ee` 校准偏移
+1. 按下 `grip`：记录机械臂末端参考位姿 `ref_ee` 与控制器参考姿态 `ref_controller_quat`
 2. 按住期间：
    - 平移：`target_xyz = ref_ee_xyz + delta_xyz`（增量）
-   - 姿态：`target_quat = ref_ctrl_to_ee_quat × ctrl_quat`（绝对）
+   - 姿态：`target_quat = apply_delta(ref_ee_quat, ctrl_delta)`（绝对）
 3. 松开 `grip`：停止更新，机械臂保持
 
 ### 旋转模式
 
 ```bash
 # 默认：Grip 时平移 + 绝对姿态
-./run_teleop_piper_webxr.sh --rotation-mode always
+./scripts/run_vr_teleop.sh --rotation-mode always
 
 # 仅 Grip 平移，按住 A 才跟手姿态
-./run_teleop_piper_webxr.sh --rotation-mode hold-a
+./scripts/run_vr_teleop.sh --rotation-mode hold-a
 
 # 仅平移，姿态锁定为接合时 ee 朝向
-./run_teleop_piper_webxr.sh --rotation-mode off
+./scripts/run_vr_teleop.sh --rotation-mode off
 ```
 
 ### 坐标映射（与 XRoboToolkit 一致）
@@ -245,7 +248,7 @@ R_HEADSET_TO_WORLD = [
 默认退出时 **不会失能**，仅断开连接。
 
 ```bash
-./run_teleop_piper_webxr.sh --disable-on-exit   # 退出时 disable
+./scripts/run_vr_teleop.sh --disable-on-exit   # 退出时 disable
 ```
 
 ---
@@ -254,27 +257,27 @@ R_HEADSET_TO_WORLD = [
 
 ### 9.1 CAN 口 `Device is DOWN`
 
-启动脚本 `run_teleop_piper_webxr.sh` 会**自动激活**命令行里出现的 CAN 口
+启动脚本 `scripts/run_vr_teleop.sh` 会**自动激活**命令行里出现的 CAN 口
 （`--left-can-port` / `--right-can-port`），无需手动操作：
 
 ```bash
 # 启动时自动激活 can0（DOWN 时拉起，默认 bitrate=1000000）
-./run_teleop_piper_webxr.sh --hands right --right-can-port can0
+./scripts/run_vr_teleop.sh --hands right --right-can-port can0
 
 # 自定义波特率
-CAN_BITRATE=500000 ./run_teleop_piper_webxr.sh --hands right --right-can-port can0
+CAN_BITRATE=500000 ./scripts/run_vr_teleop.sh --hands right --right-can-port can0
 
 # 跳过自动激活（已手动配置时）
-./run_teleop_piper_webxr.sh --hands right --right-can-port can0 --no-can-activate
+./scripts/run_vr_teleop.sh --hands right --right-can-port can0 --no-can-activate
 ```
 
-自动激活会调用 `pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh`，需要 `sudo` 权限
+自动激活会调用 `pico_vr_teleop/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh`（找不到会回退 linux 版本），需要 `sudo` 权限
 （首次可能提示输入密码）。
 
 手动激活（等效操作）：
 
 ```bash
-sudo bash /home/b0106/pico_test/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh can0 1000000
+sudo bash /home/b0106/pico_test/pico_vr_teleop/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh can0 1000000
 # 或
 sudo ip link set can0 down
 sudo ip link set can0 type can bitrate 1000000 restart-ms 100

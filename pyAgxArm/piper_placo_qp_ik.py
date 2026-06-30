@@ -19,9 +19,11 @@ except ImportError as exc:
 class PiperPlacoConfig:
     urdf_path: Path
     ee_frame: str = "link6"
+    elbow_link: str = "link3"
     dt: float = 0.02
     position_weight: float = 1.0
     orientation_weight: float = 0.1
+    elbow_weight: float = 0.0
     manipulability_weight: float = 1e-2
     joints_regularization_weight: float = 1e-4
 
@@ -82,6 +84,12 @@ class PiperPlacoQPIK:
         self.frame_task = self.solver.add_frame_task(config.ee_frame, ee_T)
         self.frame_task.configure("ee_pose", "soft", config.orientation_weight)
 
+        self.elbow_task = None
+        if config.elbow_weight > 0.0:
+            elbow_T = self.robot.get_T_world_frame(config.elbow_link)
+            self.elbow_task = self.solver.add_position_task(config.elbow_link, elbow_T[:3, 3])
+            self.elbow_task.configure("elbow_preference", "soft", config.elbow_weight)
+
         self.manip_task = self.solver.add_manipulability_task(config.ee_frame, "both", 1.0)
         self.manip_task.configure("manipulability", "soft", config.manipulability_weight)
 
@@ -110,6 +118,10 @@ class PiperPlacoQPIK:
         """直接以 4×4 矩阵设置目标帧，无 RPY 转换（与 XRoboToolkit T_world_frame 对齐）。"""
         self.frame_task.T_world_frame = T
         self.position_task.target_world = T[:3, 3]
+
+    def set_elbow_target_world(self, xyz: Sequence[float]) -> None:
+        if self.elbow_task is not None:
+            self.elbow_task.target_world = np.asarray(xyz, dtype=float)
 
     def current_flange_transform(self) -> np.ndarray:
         """返回末端帧当前的 4×4 世界变换矩阵（无 RPY 转换）。"""
