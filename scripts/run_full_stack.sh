@@ -9,7 +9,6 @@ VENV_ACTIVATE="${VENV_DIR}/bin/activate"
 WEBXR_DIR="${PROJECT_DIR}/webxr_test"
 LOG_DIR="${PROJECT_DIR}/logs"
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
-CAN_RESTART_MS="${CAN_RESTART_MS:-100}"
 
 DO_CAN_ACTIVATE=1
 DO_VR_SERVER=1
@@ -143,20 +142,40 @@ wait_for_port() {
   return 1
 }
 
+activate_one_can_port() {
+  local port="$1"
+  if ! ip link show "${port}" &>/dev/null; then
+    echo "[Launcher] 警告: 未找到接口 ${port}，跳过"
+    return 0
+  fi
+  local state
+  state="$(ip -br link show "${port}" 2>/dev/null | awk '{print $2}' || true)"
+  if [[ "${state}" == "UP" ]]; then
+    echo "[Launcher] CAN ${port} 已激活，跳过"
+    return 0
+  fi
+
+  echo "[Launcher] 激活 CAN ${port} (bitrate=${CAN_BITRATE}) ..."
+  sudo ip link set "${port}" down 2>/dev/null || true
+
+  if ! sudo ip link set "${port}" type can bitrate "${CAN_BITRATE}"; then
+    echo "[Launcher] 警告: ${port} 配置失败，继续启动（请手动检查 CAN）"
+    return 0
+  fi
+
+  if ! sudo ip link set "${port}" up; then
+    echo "[Launcher] 警告: ${port} 拉起失败，继续启动（请手动检查 CAN）"
+    return 0
+  fi
+  echo "[Launcher] CAN ${port} 已 UP"
+}
+
 activate_can_ports() {
   if [[ "${DO_CAN_ACTIVATE}" -ne 1 || "${DO_TELEOP}" -ne 1 ]]; then
     return 0
   fi
   for port in can0 can1; do
-    state="$(ip -br link show "${port}" 2>/dev/null | awk '{print $2}' || true)"
-    if [[ "${state}" != "UP" ]]; then
-      echo "[Launcher] 激活 CAN ${port} (bitrate=${CAN_BITRATE}, restart-ms=${CAN_RESTART_MS}) ..."
-      sudo ip link set "${port}" down
-      sudo ip link set "${port}" type can bitrate "${CAN_BITRATE}" restart-ms "${CAN_RESTART_MS}"
-      sudo ip link set "${port}" up
-    else
-      echo "[Launcher] CAN ${port} 已激活，跳过"
-    fi
+    activate_one_can_port "${port}"
   done
 }
 

@@ -44,7 +44,7 @@ MAX_JOINT_STEP_RAD = 0.03            # 每步最大关节增量 rad（100 Hz × 
 MAX_POS_SPEED = 0.8                  # 笛卡尔位置速度上限 m/s
 JOINT_INTERP_ALPHA = 0.75            # 关节命令插值系数（越大越跟手）
 ELBOW_WEIGHT = 0.02                  # 肘部偏好任务权重（0 关闭）
-INIT_JOINTS = [0.0, 1.8, -0.9, 0.0, 0.5, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
+INIT_JOINTS = [0.0, 1.3, -0.9, 0.0, 0.5, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
 INIT_JOINT_TIMEOUT = 6.0
 INIT_JOINT_SETTLE = 0.5
 INIT_ABS_X = None  # 例如 0.25；None 表示保持当前
@@ -57,7 +57,7 @@ HOME_COOLDOWN_S = 2.0
 # ee 帧 = link6 法兰帧绕 Z 轴转 90°（无平移偏置）
 TCP_OFFSET_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, np.pi / 2]
 # 姿态绝对控制：目标朝向偏离初始 ee 朝向的最大角度（朝前保护）
-MAX_ROT_RANGE_RAD = np.radians(60)
+MAX_ROT_RANGE_RAD = np.radians(120)
 
 
 class EMAFilter:
@@ -693,10 +693,11 @@ class WebXRPiperPlacoTeleop:
         dev_deg = np.degrees(np.linalg.norm(
             quat_diff_as_angle_axis(arm.home_quat_wxyz, target_quat_wxyz)
         )) if arm.home_quat_wxyz is not None else 0.0
+        max_rot_deg = np.degrees(MAX_ROT_RANGE_RAD)
         status = (
             f"\r[Teleop-{hand}][{rot_mode_tag}] XYZ=({target_xyz[0]:.3f},{target_xyz[1]:.3f},{target_xyz[2]:.3f}) "
             f"q=({target_quat_wxyz[0]:.2f},{target_quat_wxyz[1]:.2f},{target_quat_wxyz[2]:.2f},{target_quat_wxyz[3]:.2f}) "
-            f"偏{dev_deg:.1f}°/60°"
+            f"偏{dev_deg:.1f}°/{max_rot_deg:.0f}°"
         )
         pad = " " * max(0, self._last_status_len - len(status))
         sys.stdout.write(status + pad)

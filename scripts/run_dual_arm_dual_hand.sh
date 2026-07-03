@@ -4,7 +4,6 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
-CAN_RESTART_MS="${CAN_RESTART_MS:-100}"
 DO_CAN_ACTIVATE=1
 ARGS=()
 prev=""
@@ -33,9 +32,9 @@ if [[ "${DO_CAN_ACTIVATE}" -eq 1 ]]; then
   for port in can0 can1; do
     state="$(ip -br link show "${port}" 2>/dev/null | awk '{print $2}' || true)"
     if [[ "${state}" != "UP" ]]; then
-      echo "[Launcher] 激活 CAN ${port} (bitrate=${CAN_BITRATE}, restart-ms=${CAN_RESTART_MS}) ..."
+      echo "[Launcher] 激活 CAN ${port} (bitrate=${CAN_BITRATE}) ..."
       sudo ip link set "${port}" down
-      sudo ip link set "${port}" type can bitrate "${CAN_BITRATE}" restart-ms "${CAN_RESTART_MS}"
+      sudo ip link set "${port}" type can bitrate "${CAN_BITRATE}"
       sudo ip link set "${port}" up
     else
       echo "[Launcher] CAN ${port} 已激活，跳过"

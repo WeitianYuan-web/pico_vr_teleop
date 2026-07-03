@@ -24,6 +24,12 @@ from teleop_piper_webxr import (  # noqa: E402
 from teleop_state_bridge import hand_registers_to_radians  # noqa: E402
 
 
+HAND_MIN_POSITION = 0.2          # 扳机松开时手的归一化位置下限（0=全张, 1=全握）
+HAND_MAX_POSITION = 0.95         # 扳机按满时手的归一化位置上限
+HAND_CMD_DEADBAND = 0.02         # 归一化位置变化小于该值则不下发
+HAND_CMD_MIN_INTERVAL_S = 0.05   # 手命令最小间隔
+
+
 class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
     """双臂 + 双灵巧手 WebXR 遥操作（Trigger 控制半张/张开）。"""
 
@@ -36,7 +42,8 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         hand_baudrate: int,
         hand_force: int,
         hand_speed: int,
-        trigger_half_threshold: float,
+        hand_min_position: float,
+        hand_max_position: float,
         hand_control_hz: int,
         hand_io_hz: int,
         hand_connect_retry: int,
@@ -60,11 +67,14 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         self.hand_baudrate = hand_baudrate
         self.hand_force = hand_force
         self.hand_speed = hand_speed
-        self.trigger_half_threshold = trigger_half_threshold
+        self.hand_min_position = max(0.0, min(float(hand_min_position), 1.0))
+        self.hand_max_position = max(self.hand_min_position, min(float(hand_max_position), 1.0))
         self.hand_control_hz = hand_control_hz
         self.hand_io_hz = hand_io_hz
         self.hand_connect_retry = max(1, hand_connect_retry)
         self._ih = None
+        self._hand_open_pose: list[int] | None = None
+        self._hand_close_pose: list[int] | None = None
         self.dex_hands = {
             "left": SimpleNamespace(
                 side="left",
@@ -72,7 +82,7 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
                 hand_id=left_hand_id,
                 dev=None,
                 connected=False,
-                last_cmd_half=None,
+                last_cmd_alpha=None,
                 last_cmd_time=0.0,
             ),
             "right": SimpleNamespace(
@@ -81,7 +91,7 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
                 hand_id=right_hand_id,
                 dev=None,
                 connected=False,
-                last_cmd_half=None,
+                last_cmd_alpha=None,
                 last_cmd_time=0.0,
             ),
         }
@@ -105,11 +115,37 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         self._ih = ih
         return ih
 
+    def _trigger_to_hand_alpha(self, trigger: float) -> float:
+        """将扳机 [0,1] 线性映射到 [hand_min_position, hand_max_position]。"""
+        t = max(0.0, min(float(trigger), 1.0))
+        lo = self.hand_min_position
+        hi = self.hand_max_position
+        return lo + t * (hi - lo)
+
+    def _lerp_hand_pose(self, alpha: float) -> list[int]:
+        if self._hand_open_pose is None or self._hand_close_pose is None:
+            raise RuntimeError("灵巧手姿态未初始化")
+        a = max(0.0, min(float(alpha), 1.0))
+        return [
+            int(self._hand_open_pose[i] + a * (self._hand_close_pose[i] - self._hand_open_pose[i]))
+            for i in range(len(self._hand_open_pose))
+        ]
+
+    def _submit_hand_alpha(self, info: SimpleNamespace, alpha: float) -> bool:
+        if info.dev is None:
+            return False
+        pose = self._lerp_hand_pose(alpha)
+        return bool(
+            info.dev.submit_angles(pose, self.hand_force, self.hand_speed, True)
+        )
+
     def connect_dex_hands(self):
         if self.disable_hands:
             print("[Hand] 已禁用灵巧手控制（--disable-hands）")
             return
         ih = self._load_inspire_binding()
+        self._hand_open_pose = list(ih.Hand.default_open_pose())
+        self._hand_close_pose = list(ih.Hand.half_close_pose())
         for side in self.active_hands:
             info = self.dex_hands[side]
             dev = None
@@ -143,12 +179,16 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
                     continue
                 info.dev = dev
                 info.connected = True
-                info.last_cmd_half = None
+                info.last_cmd_alpha = None
                 info.last_cmd_time = 0.0
-                if dev.open(self.hand_force, self.hand_speed):
-                    info.last_cmd_half = False
+                init_alpha = self.hand_min_position
+                if self._submit_hand_alpha(info, init_alpha):
+                    info.last_cmd_alpha = init_alpha
                     info.last_cmd_time = time.time()
-                print(f"[Hand-{side}] 已连接并进入张开状态")
+                print(
+                    f"[Hand-{side}] 已连接，线性控制 "
+                    f"[{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]（扳机映射）"
+                )
                 break
             if info.connected:
                 continue
@@ -186,7 +226,7 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
             if not info.connected or info.dev is None:
                 continue
             try:
-                info.dev.open(self.hand_force, self.hand_speed)
+                self._submit_hand_alpha(info, self.hand_min_position)
                 time.sleep(0.05)
             except Exception:
                 pass
@@ -209,25 +249,20 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         ctrl = next((c for c in data.get("controllers", []) if c.get("handedness") == side), None)
         if ctrl is None:
             return
-        trigger = float(ctrl.get("trigger", 0.0))
-        target_half = trigger > self.trigger_half_threshold
+        trigger = max(0.0, min(float(ctrl.get("trigger", 0.0)), 1.0))
+        target_alpha = self._trigger_to_hand_alpha(trigger)
         now = time.time()
-        if info.last_cmd_half is not None and info.last_cmd_half == target_half:
+        if info.last_cmd_alpha is not None:
+            if abs(target_alpha - info.last_cmd_alpha) < HAND_CMD_DEADBAND:
+                return
+        if now - info.last_cmd_time < HAND_CMD_MIN_INTERVAL_S:
             return
-        if now - info.last_cmd_time < 0.08:
-            return
-        if target_half:
-            ok = info.dev.half_close(self.hand_force, self.hand_speed)
-            state_tag = "半张"
-        else:
-            ok = info.dev.open(self.hand_force, self.hand_speed)
-            state_tag = "张开"
+        ok = self._submit_hand_alpha(info, target_alpha)
         if ok:
-            info.last_cmd_half = target_half
+            info.last_cmd_alpha = target_alpha
             info.last_cmd_time = now
-            print(f"\n[Hand-{side}] Trigger={trigger:.2f} -> {state_tag}")
-        else:
-            print(f"\n[Hand-{side}] 指令失败: Trigger={trigger:.2f}, target={state_tag}")
+        elif info.last_cmd_alpha is None or abs(target_alpha - info.last_cmd_alpha) >= 0.1:
+            print(f"\n[Hand-{side}] 指令失败: Trigger={trigger:.2f}, alpha={target_alpha:.2f}")
 
     def process_vr_data(self, data: dict, hand: str):
         super().process_vr_data(data, hand)
@@ -235,8 +270,8 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
 
     async def ws_loop(self):
         print(
-            "[Hand] 控制规则：Trigger > "
-            f"{self.trigger_half_threshold:.2f} -> 半张，<= 阈值 -> 张开"
+            "[Hand] 控制规则：Trigger 线性映射 -> "
+            f"手位置 [{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]（0=全张, 1=半握）"
         )
         await super().ws_loop()
 
@@ -286,10 +321,16 @@ def parse_args():
         help="任一灵巧手连接失败即退出（默认跳过失败侧并继续双臂）",
     )
     parser.add_argument(
-        "--trigger-half-threshold",
+        "--hand-min-position",
         type=float,
-        default=0.5,
-        help="Trigger 阈值：大于该值下发半张，否则张开",
+        default=HAND_MIN_POSITION,
+        help="扳机松开时手的归一化位置下限（默认 0.2，范围 0~1）",
+    )
+    parser.add_argument(
+        "--hand-max-position",
+        type=float,
+        default=HAND_MAX_POSITION,
+        help="扳机按满时手的归一化位置上限（默认 0.95，范围 0~1）",
     )
     parser.add_argument("--hand-control-hz", type=int, default=200, help="灵巧手控制线程频率")
     parser.add_argument("--hand-io-hz", type=int, default=30, help="灵巧手 IO 线程频率")
@@ -357,7 +398,8 @@ def main():
         hand_baudrate=args.hand_baudrate,
         hand_force=args.hand_force,
         hand_speed=args.hand_speed,
-        trigger_half_threshold=args.trigger_half_threshold,
+        hand_min_position=args.hand_min_position,
+        hand_max_position=args.hand_max_position,
         hand_control_hz=args.hand_control_hz,
         hand_io_hz=args.hand_io_hz,
         hand_connect_retry=args.hand_connect_retry,
