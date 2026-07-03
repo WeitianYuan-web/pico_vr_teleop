@@ -688,6 +688,32 @@ class WebXRPiperPlacoTeleop:
                     print(f"[Robot-{hand}] 已断开（未失能）")
 
 
+def resolve_arm_can_ports(
+    hands: tuple[str, ...],
+    left_can_port: str | None,
+    right_can_port: str | None,
+) -> tuple[str | None, str | None]:
+    """按控制模式解析左右臂 CAN 端口；双臂默认 left=can0、right=can1。"""
+    _, default_port = resolve_can_backend()
+    if len(hands) == 2:
+        left = left_can_port or default_port
+        if right_can_port:
+            right = right_can_port
+        elif default_port == "can0":
+            right = "can1"
+        else:
+            right = default_port
+        if left == right:
+            raise ValueError(
+                f"双臂模式左右臂不能使用同一 CAN 端口 ({left})，"
+                "请指定 --left-can-port 与 --right-can-port"
+            )
+        return left, right
+    if hands[0] == "left":
+        return left_can_port or default_port, None
+    return None, right_can_port or default_port
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="WebXR -> 双 Piper 遥操作（Placo QP）")
     parser.add_argument(
@@ -696,8 +722,8 @@ def parse_args():
         default="both",
         help="控制模式：both=双臂；left=仅左臂；right=仅右臂（单臂模式）",
     )
-    parser.add_argument("--left-can-port", default=None, help="左臂 CAN 端口，默认自动检测")
-    parser.add_argument("--right-can-port", default=None, help="右臂 CAN 端口，默认自动检测")
+    parser.add_argument("--left-can-port", default=None, help="左臂 CAN 端口，双臂默认 can0")
+    parser.add_argument("--right-can-port", default=None, help="右臂 CAN 端口，双臂默认 can1")
     parser.add_argument("--robot-model", default="piper_h", help="机械臂型号")
     parser.add_argument("--disable-on-exit", action="store_true", help="退出时执行 disable（默认仅断开不失能）")
     parser.add_argument(
@@ -726,9 +752,14 @@ def _parse_pose6(text: str):
 if __name__ == "__main__":
     args = parse_args()
     hands = HANDS if args.hands == "both" else (args.hands,)
+    left_can_port, right_can_port = resolve_arm_can_ports(
+        hands, args.left_can_port, args.right_can_port
+    )
+    if len(hands) == 2:
+        print(f"[System] 双臂 CAN 映射: left={left_can_port}, right={right_can_port}")
     WebXRPiperPlacoTeleop(
-        left_can_port=args.left_can_port,
-        right_can_port=args.right_can_port,
+        left_can_port=left_can_port,
+        right_can_port=right_can_port,
         robot_model=args.robot_model,
         disable_on_exit=args.disable_on_exit,
         rotation_mode=args.rotation_mode,
