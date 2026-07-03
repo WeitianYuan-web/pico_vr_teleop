@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-import pyrealsense2 as rs
 import rclpy
+
+try:
+    import pyrealsense2 as rs
+
+    HAS_REALSENSE = True
+except ImportError:
+    rs = None  # type: ignore[assignment]
+    HAS_REALSENSE = False
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -55,6 +64,10 @@ class RealSenseCameraPublisher:
         self.publisher = node.create_publisher(Image, camera_cfg.topic, SENSOR_QOS)
         self.pipeline: Optional[rs.pipeline] = None
         self.enabled = False
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._published_count = 0
+        self._last_stats_mono = time.monotonic()
 
     def start(self) -> None:
         if not self.serial:
@@ -68,29 +81,53 @@ class RealSenseCameraPublisher:
         self.pipeline = rs.pipeline()
         self.pipeline.start(config)
         self.enabled = True
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._publish_loop,
+            name=f"{self.camera_cfg.name}_publisher",
+            daemon=True,
+        )
+        self._thread.start()
         self.node.get_logger().info(
             f"{self.camera_cfg.name} 已启动: serial={self.serial}, "
             f"{self.width}x{self.height}@{self.fps}"
         )
 
     def stop(self) -> None:
+        self.enabled = False
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
         if self.pipeline is not None:
             self.pipeline.stop()
             self.pipeline = None
-        self.enabled = False
 
-    def poll_and_publish(self, stamp_msg) -> None:
+    def _publish_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self.wait_and_publish()
+            except RuntimeError as exc:
+                if self._stop_event.is_set():
+                    break
+                self.node.get_logger().warning(
+                    f"{self.camera_cfg.name} 等待图像超时或失败: {exc!r}"
+                )
+            except Exception as exc:
+                if self._stop_event.is_set():
+                    break
+                self.node.get_logger().error(f"{self.camera_cfg.name} 发布图像失败: {exc!r}")
+
+    def wait_and_publish(self) -> None:
         if not self.enabled or self.pipeline is None:
             return
-        frames = self.pipeline.poll_for_frames()
-        if not frames:
-            return
+        frames = self.pipeline.wait_for_frames(1000)
         color_frame = frames.get_color_frame()
         if not color_frame:
             return
 
         msg = Image()
-        msg.header.stamp = stamp_msg
+        msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.header.frame_id = self.camera_cfg.frame_id
         msg.height = color_frame.get_height()
         msg.width = color_frame.get_width()
@@ -99,6 +136,13 @@ class RealSenseCameraPublisher:
         msg.step = msg.width * 3
         msg.data = memoryview(color_frame.get_data()).tobytes()
         self.publisher.publish(msg)
+        self._published_count += 1
+        now = time.monotonic()
+        if now - self._last_stats_mono >= 5.0:
+            rate = self._published_count / (now - self._last_stats_mono)
+            self.node.get_logger().info(f"{self.camera_cfg.name} 发布帧率: {rate:.1f} Hz")
+            self._published_count = 0
+            self._last_stats_mono = now
 
 
 class TeleopPublisherNode(Node):
@@ -161,26 +205,33 @@ class TeleopPublisherNode(Node):
             ),
         ]
 
-        self.cameras = self._create_camera_publishers()
-        for camera in self.cameras:
-            try:
-                camera.start()
-            except Exception as exc:
-                self.get_logger().error(
-                    f"{camera.camera_cfg.name} 启动失败: {exc!r}，该相机将不会发布。"
-                )
+        self.cameras: List[RealSenseCameraPublisher] = []
+        if HAS_REALSENSE:
+            self.cameras = self._create_camera_publishers()
+            for camera in self.cameras:
+                try:
+                    camera.start()
+                except Exception as exc:
+                    self.get_logger().error(
+                        f"{camera.camera_cfg.name} 启动失败: {exc!r}，该相机将不会发布。"
+                    )
+        else:
+            self.get_logger().warning(
+                "未安装 pyrealsense2，跳过相机话题；/puppet/* 仍会正常发布。"
+            )
 
-        camera_period = 1.0 / max(self.camera_fps, 1)
         placeholder_period = 1.0 / max(self.placeholder_hz, 1e-3)
-        self.camera_timer = self.create_timer(camera_period, self._on_camera_timer)
         self.placeholder_timer = self.create_timer(placeholder_period, self._on_state_timer)
+        camera_hint = "RealSense 相机已启用" if HAS_REALSENSE else "相机未启用(pyrealsense2 缺失)"
         self.get_logger().info(
-            "teleop 发布者已启动：RealSense 发布相机图像；"
+            f"teleop 发布者已启动：{camera_hint}；"
             f"臂/手状态监听 udp://{self.state_udp_host}:{self.state_udp_port}，"
             "收到遥操作数据后发布真实 /puppet/* 话题。"
         )
 
     def _list_device_serials(self) -> List[str]:
+        if not HAS_REALSENSE:
+            return []
         ctx = rs.context()
         serials: List[str] = []
         for dev in ctx.query_devices():
@@ -231,14 +282,6 @@ class TeleopPublisherNode(Node):
                 )
             )
         return cameras
-
-    def _on_camera_timer(self) -> None:
-        stamp = self.get_clock().now().to_msg()
-        for camera in self.cameras:
-            try:
-                camera.poll_and_publish(stamp)
-            except Exception as exc:
-                self.get_logger().error(f"{camera.camera_cfg.name} 发布图像失败: {exc!r}")
 
     def _make_joint_state(
         self,
@@ -347,7 +390,8 @@ def main() -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

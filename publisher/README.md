@@ -12,7 +12,7 @@ ROS2 发布者节点，发布以下话题：
 - `/puppet/hand_left` (`sensor_msgs/JointState`)
 - `/puppet/hand_right` (`sensor_msgs/JointState`)
 
-其中 3 路相机话题发布 RealSense 实时彩色图像；`/puppet/*` 话题默认监听本机 UDP `17981`，
+其中 3 路相机话题发布 RealSense 实时彩色图像，每路相机使用独立采集线程发布；`/puppet/*` 话题默认监听本机 UDP `17981`，
 接收 `control` 或 `webxr_test` 遥操作脚本上报的臂/手状态后发布真实数据。
 若超过 `state_stale_timeout_s` 未收到新数据，则发布零位占位。
 
@@ -25,6 +25,8 @@ ROS2 发布者节点，发布以下话题：
 
 ```bash
 cd /home/b0106/pico_test/pico_vr_teleop
+source /opt/ros/jazzy/setup.bash
+source .venv/bin/activate
 python3 publisher/teleop_realsense_publisher.py
 ```
 
@@ -45,6 +47,7 @@ python3 publisher/teleop_realsense_publisher.py --ros-args \
 ```
 
 若不手动指定序列号，节点会自动按设备序列号排序后依次分配到 `f/l/r`。
+节点会每 5 秒打印一次各相机内部发布帧率；若 `ros2 topic hz` 明显低于节点日志，优先检查订阅端 QoS、DDS 或网络负载。
 
 ## 与遥操作联动
 
