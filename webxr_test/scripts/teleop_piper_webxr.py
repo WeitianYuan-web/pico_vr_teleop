@@ -39,10 +39,15 @@ WS_URI = "wss://localhost:8081"
 HANDS = ("left", "right")
 SCALE_FACTOR = 1.0
 ROTATION_SCALE = 1.0
-CMD_RATE_HZ = 100                    # 控制频率 Hz
-MAX_JOINT_STEP_RAD = 0.03            # 每步最大关节增量 rad（100 Hz × 0.03 ≈ 3 rad/s 上限）
+CMD_RATE_HZ = 200                    # 控制频率 Hz（额定值，用于 QP dt 初始化；实际达到多少见 [频率监测] 打印）
+# 以下限速/平滑参数均改为“物理量（速度 rad/s、m/s）+ 时间常数 tau（秒）”的形式，
+# 按每次调用时测得的真实 dt 换算，与实际达到的控制频率解耦——频率提高只会让运动
+# 更连续（步子更细），不会改变整体跟手速度或滤波带宽，从而避免“调频率反而更抖”。
+MAX_JOINT_VEL_RADPS = 3.0            # 关节最大角速度 rad/s（与频率无关，按真实 dt 换算单步限幅）
+JOINT_SMOOTH_TAU_S = 0.05            # 关节命令一阶平滑时间常数 s（越大越平滑但越滞后）
 MAX_POS_SPEED = 0.8                  # 笛卡尔位置速度上限 m/s
-JOINT_INTERP_ALPHA = 0.75            # 关节命令插值系数（越大越跟手）
+POS_SMOOTH_TAU_S = 0.045             # 位置输入低通时间常数 s
+ROT_SMOOTH_TAU_S = 0.06              # 姿态输入低通时间常数 s（比位置更平滑）
 ELBOW_WEIGHT = 0.02                  # 肘部偏好任务权重（0 关闭）
 INIT_JOINTS = [0.0, 1.3, -0.9, 0.0, 0.5, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
 INIT_JOINT_TIMEOUT = 6.0
@@ -60,16 +65,26 @@ TCP_OFFSET_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, np.pi / 2]
 MAX_ROT_RANGE_RAD = np.radians(120)
 
 
+def time_based_alpha(dt: float, tau: float) -> float:
+    """将时间常数 tau（秒）换算为当前 dt 下的一阶平滑系数，保证滤波带宽与调用频率无关。"""
+    if tau <= 0.0:
+        return 1.0
+    return 1.0 - float(np.exp(-dt / tau))
+
+
 class EMAFilter:
-    def __init__(self, alpha: float = 0.2):
-        self.alpha = alpha
+    """基于时间常数 tau（秒）的一阶低通滤波器，每次 update 需传入真实 dt。"""
+
+    def __init__(self, tau: float = 0.05):
+        self.tau = tau
         self.value = None
 
-    def update(self, x: np.ndarray) -> np.ndarray:
+    def update(self, x: np.ndarray, dt: float) -> np.ndarray:
         if self.value is None:
             self.value = x.copy()
         else:
-            self.value = self.alpha * x + (1.0 - self.alpha) * self.value
+            alpha = time_based_alpha(dt, self.tau)
+            self.value = alpha * x + (1.0 - alpha) * self.value
         return self.value
 
 
@@ -227,6 +242,11 @@ class WebXRPiperPlacoTeleop:
 
         self.last_schema_warn_time = 0.0
         self._last_status_len = 0
+        self._vr_frame_count = 0
+        self._vr_rate_window_start = 0.0
+        self._loop_iter_count = 0
+        self._loop_rate_window_start = 0.0
+        self._loop_last_iter_time = 0.0
         self.arms = {}
         for hand in HANDS:
             self.arms[hand] = SimpleNamespace(
@@ -240,8 +260,8 @@ class WebXRPiperPlacoTeleop:
                 ref_ee_quat_wxyz=None,
                 ref_controller_xyz=None,
                 ref_controller_quat_wxyz=None,
-                pos_filter=EMAFilter(alpha=0.2),
-                rot_filter=EMAFilter(alpha=0.15),   # 绝对姿态滤波（比增量模式更平滑）
+                pos_filter=EMAFilter(tau=POS_SMOOTH_TAU_S),
+                rot_filter=EMAFilter(tau=ROT_SMOOTH_TAU_S),   # 绝对姿态滤波（比增量模式更平滑）
                 last_gripper_time=0.0,
                 prev_b_pressed=False,
                 last_home_time=0.0,
@@ -253,6 +273,7 @@ class WebXRPiperPlacoTeleop:
                 _joint_interp_q=None,
                 _home_tcp_T=None,
                 fw_ver=None,
+                _last_frame_time=None,
             )
         self.arms["left"].can_port = self.left_can_port
         self.arms["right"].can_port = self.right_can_port
@@ -372,6 +393,7 @@ class WebXRPiperPlacoTeleop:
         qy: float,
         qz: float,
         qw: float,
+        dt: float,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         平移：增量控制（相对 grip 接合时的参考位置）。
@@ -390,7 +412,7 @@ class WebXRPiperPlacoTeleop:
             return np.zeros(3, dtype=float), arm.ref_ee_quat_wxyz.copy()
 
         # 平移：增量
-        delta_xyz = arm.pos_filter.update(controller_xyz - arm.ref_controller_xyz) * SCALE_FACTOR
+        delta_xyz = arm.pos_filter.update(controller_xyz - arm.ref_controller_xyz, dt) * SCALE_FACTOR
 
         # 姿态：绝对控制（局部相对四元数法）
         # q_rel 表示“从 grip 接合参考姿态到当前姿态”的相对旋转（手柄局部轴语义）
@@ -414,7 +436,7 @@ class WebXRPiperPlacoTeleop:
         prev_q = arm.rot_filter.value
         if prev_q is not None and np.dot(prev_q, raw_q) < 0:
             raw_q = -raw_q
-        smoothed = arm.rot_filter.update(raw_q)
+        smoothed = arm.rot_filter.update(raw_q, dt)
         norm = np.linalg.norm(smoothed)
         target_quat = smoothed / norm if norm > 1e-12 else arm.ref_ee_quat_wxyz.copy()
 
@@ -578,11 +600,15 @@ class WebXRPiperPlacoTeleop:
         tcp_T = self._get_current_tcp_transform(arm)
         return tcp_T[:3, 3].copy(), tcp_T[:3, :3].copy(), np.array(q, dtype=float)
 
-    def _interpolate_joint_command(self, arm: SimpleNamespace, current_q: np.ndarray, target_q: np.ndarray) -> np.ndarray:
+    def _interpolate_joint_command(
+        self, arm: SimpleNamespace, current_q: np.ndarray, target_q: np.ndarray, dt: float
+    ) -> np.ndarray:
         if arm._joint_interp_q is None:
             arm._joint_interp_q = current_q.copy()
-        arm._joint_interp_q = arm._joint_interp_q + JOINT_INTERP_ALPHA * (target_q - arm._joint_interp_q)
-        dq = np.clip(arm._joint_interp_q - current_q, -MAX_JOINT_STEP_RAD, MAX_JOINT_STEP_RAD)
+        alpha = time_based_alpha(dt, JOINT_SMOOTH_TAU_S)
+        arm._joint_interp_q = arm._joint_interp_q + alpha * (target_q - arm._joint_interp_q)
+        max_step = MAX_JOINT_VEL_RADPS * dt
+        dq = np.clip(arm._joint_interp_q - current_q, -max_step, max_step)
         return current_q + dq
 
     def process_vr_data(self, data: dict, hand: str):
@@ -603,6 +629,14 @@ class WebXRPiperPlacoTeleop:
         trigger_val = ctrl["trigger"]
         is_clutch_pressed = clutch_val > 0.5
         now = time.time()
+        # 本臂两次实际控制 tick 之间的真实间隔，供滤波/插值/限速统一使用，
+        # 与 CMD_RATE_HZ 额定值以及实际达到的循环频率解耦。
+        nominal_dt = 1.0 / CMD_RATE_HZ
+        if arm._last_frame_time is not None:
+            real_dt = max(nominal_dt * 0.2, min(now - arm._last_frame_time, nominal_dt * 8.0))
+        else:
+            real_dt = nominal_dt
+        arm._last_frame_time = now
         b_pressed = self._is_b_button_pressed(ctrl)
         if b_pressed and not arm.prev_b_pressed:
             self._go_home(arm)
@@ -635,7 +669,7 @@ class WebXRPiperPlacoTeleop:
             return
         # 返回：平移增量 + 绝对目标姿态四元数
         delta_xyz, target_quat_wxyz = self._process_xr_pose(
-            arm, vr_pos, ctrl["qx"], ctrl["qy"], ctrl["qz"], ctrl["qw"]
+            arm, vr_pos, ctrl["qx"], ctrl["qy"], ctrl["qz"], ctrl["qw"], real_dt
         )
         if arm.ref_ee_xyz is None or arm.ref_ee_quat_wxyz is None:
             return
@@ -654,9 +688,10 @@ class WebXRPiperPlacoTeleop:
         # 平移目标 = 参考位置 + 增量
         target_xyz = arm.ref_ee_xyz + delta_xyz
 
-        # 位置速度限幅（绝对姿态模式下姿态不做额外限幅，EMA 已提供平滑）
-        dt_ctrl = 1.0 / CMD_RATE_HZ
-        max_pos_step = MAX_POS_SPEED * dt_ctrl
+        # 位置速度限幅：使用统一测得的真实 dt（real_dt），而非固定 1/CMD_RATE_HZ。
+        # 若循环因双臂+双手 IO 耗时导致实际周期长于额定值，仍按真实 dt 限速，避免
+        # “限幅按额定周期计算、但实际更新间隔更长”造成的抖动/超调。
+        max_pos_step = MAX_POS_SPEED * real_dt
         if arm._prev_target_xyz is not None:
             pos_delta = target_xyz - arm._prev_target_xyz
             pos_norm = np.linalg.norm(pos_delta)
@@ -687,7 +722,7 @@ class WebXRPiperPlacoTeleop:
             self._last_status_len = len(warn)
             sys.stdout.flush()
             return
-        q_cmd = self._interpolate_joint_command(arm, current_q, q_sol)
+        q_cmd = self._interpolate_joint_command(arm, current_q, q_sol, real_dt)
         arm.robot.move_j(q_cmd.tolist())
         rot_mode_tag = ("ABS" if rotation_active else "LOCK")
         dev_deg = np.degrees(np.linalg.norm(
@@ -733,6 +768,7 @@ class WebXRPiperPlacoTeleop:
                             except json.JSONDecodeError:
                                 continue
                             self._latest_vr_data = payload
+                            self._track_vr_rate()
                     finally:
                         control_task.cancel()
                         try:
@@ -743,14 +779,43 @@ class WebXRPiperPlacoTeleop:
                 print(f"\n[Network] 连接中断: {exc}，2 秒后重连")
                 await asyncio.sleep(2.0)
 
+    def _track_vr_rate(self):
+        """统计 WebXR 数据实际到达频率（每 3 秒打印一次），用于排查抖动是否源于上行数据率不足。"""
+        now = time.time()
+        if self._vr_rate_window_start == 0.0:
+            self._vr_rate_window_start = now
+        self._vr_frame_count += 1
+        elapsed = now - self._vr_rate_window_start
+        if elapsed >= 3.0:
+            hz = self._vr_frame_count / elapsed
+            print(f"\n[频率监测] WebXR 上传实际帧率 ≈ {hz:.1f} Hz（预期 45 Hz）")
+            self._vr_frame_count = 0
+            self._vr_rate_window_start = now
+
+    def _track_loop_rate(self):
+        """统计控制循环实际迭代频率（每 3 秒打印一次），用于确认是否达到 CMD_RATE_HZ。"""
+        now = time.time()
+        if self._loop_rate_window_start == 0.0:
+            self._loop_rate_window_start = now
+        self._loop_iter_count += 1
+        elapsed = now - self._loop_rate_window_start
+        if elapsed >= 3.0:
+            hz = self._loop_iter_count / elapsed
+            print(f"\n[频率监测] 机械臂控制循环实际频率 ≈ {hz:.1f} Hz（额定 {CMD_RATE_HZ} Hz）")
+            self._loop_iter_count = 0
+            self._loop_rate_window_start = now
+
     async def control_loop(self):
         interval = 1.0 / CMD_RATE_HZ
         while True:
+            iter_start = time.time()
             if self._latest_vr_data is not None:
                 for hand in self.active_hands:
                     self.process_vr_data(self._latest_vr_data, hand)
             self._maybe_publish_state()
-            await asyncio.sleep(interval)
+            self._track_loop_rate()
+            elapsed = time.time() - iter_start
+            await asyncio.sleep(max(0.0, interval - elapsed))
 
     def run(self):
         try:

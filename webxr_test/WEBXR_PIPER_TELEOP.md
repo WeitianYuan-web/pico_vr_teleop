@@ -9,10 +9,14 @@
 
 当前链路：
 
-- 前端采集：`webxr_test/index.html`（WebXR 上传 **45 Hz**）
+- 前端采集：`webxr_test/index.html`（WebXR 上传额定 **90 Hz**，实际取决于头显原生刷新率）
 - 数据服务：`webxr_test/server.py`（WSS 8081）
-- 机械臂控制：`webxr_test/scripts/teleop_piper_webxr.py`（控制环 **100 Hz**）
+- 机械臂控制：`webxr_test/scripts/teleop_piper_webxr.py`（控制环额定 **200 Hz**）
 - IK 后端：`pyAgxArm/piper_placo_qp_ik.py`（Placo 多任务加权 QP）
+
+> 额定频率仅为循环节拍上限，真实达到的频率会在终端每 3 秒打印一次
+> `[频率监测] ... 实际帧率/实际频率 ≈ xx.x Hz`，请以此为准。所有限速、平滑
+> 参数（见第 6、7 节）均按每次调用测得的真实 `dt` 换算，与额定频率解耦。
 
 控制输出均为 **关节空间命令**：`robot.move_j(...)`。
 
@@ -34,7 +38,7 @@
 | 位姿定义 | `[x,y,z]` 米 + 四元数/旋转矩阵；与法兰系差一个 Z 轴 90° 修正（`TCP_OFFSET_POSE` 默认 `[0,0,0,0,0,π/2]`） |
 | 关节限位 | IK 内按 URDF 6 轴上下限硬约束剪裁 |
 | 姿态精度 | 位置权重 **1.0** > 姿态权重 **0.1**（姿态可被牺牲） |
-| 速度限制 | 上层插值 `max_pos_speed=0.8 m/s`；关节步进 `MAX_JOINT_STEP_RAD` |
+| 速度限制 | 上层插值 `MAX_POS_SPEED=0.8 m/s`；关节 `MAX_JOINT_VEL_RADPS=3.0 rad/s`（按真实 dt 换算单步限幅，非固定步长） |
 
 ### 1.3 平移 / 姿态控制方式
 
@@ -207,23 +211,25 @@ R_HEADSET_TO_WORLD = [
    - manipulability 任务
    - joints regularization
 
-2. **双环频率**
-   - WebXR 数据接收：45 Hz（`index.html`）
-   - 机械臂控制环：100 Hz（`control_loop`）
-   - 两帧 WebXR 之间由控制环补点
+2. **双环频率（额定值，实际以终端 `[频率监测]` 打印为准）**
+   - WebXR 数据接收：额定 90 Hz（`index.html`，受头显原生刷新率限制）
+   - 机械臂控制环：额定 200 Hz（`control_loop`）
+   - 两帧 WebXR 之间由控制环补点（复用上一帧数据，因目标不变会被判定为无变化而跳过下发）
 
-3. **EMA 平滑**
-   - 平移增量、绝对姿态分别滤波
+3. **时间常数（tau）驱动的 EMA 平滑**
+   - 平移增量、绝对姿态分别滤波，`EMAFilter` 内部按每次调用的真实 `dt` 与固定的时间常数 `tau`
+     换算平滑系数（`alpha = 1 - exp(-dt/tau)`），因此滤波带宽只取决于 `tau`，
+     与实际达到的控制/数据频率无关——频率提高不会意外让噪声更容易穿透进来。
 
 4. **关节插值**
-   - `JOINT_INTERP_ALPHA` 一阶插值 + 单步限幅
+   - `JOINT_SMOOTH_TAU_S` 时间常数一阶平滑 + 按真实 `dt` 换算的单步限幅（见第 5 点）
 
-5. **速度限幅**
+5. **速度限幅（均按真实 dt 换算，不用固定步长）**
    - 笛卡尔位置：`MAX_POS_SPEED = 0.8 m/s`
-   - 关节步进：`MAX_JOINT_STEP_RAD = 0.03 rad`（100 Hz 下约 3 rad/s）
+   - 关节角速度：`MAX_JOINT_VEL_RADPS = 3.0 rad/s`
 
 6. **朝前保护**
-   - 姿态目标限定在初始 ee 朝向 ±60° 内
+   - 姿态目标限定在初始 ee 朝向 ±120° 内（`MAX_ROT_RANGE_RAD`）
 
 ---
 
@@ -232,11 +238,13 @@ R_HEADSET_TO_WORLD = [
 | 常量 | 默认值 | 说明 |
 |------|--------|------|
 | `SCALE_FACTOR` | `1.0` | 手柄位移映射比例 |
-| `CMD_RATE_HZ` | `100` | 控制频率 |
-| `MAX_JOINT_STEP_RAD` | `0.03` | 关节步长限幅 |
+| `CMD_RATE_HZ` | `200` | 控制循环额定频率（QP dt 初始化用，实际频率见终端打印） |
+| `MAX_JOINT_VEL_RADPS` | `3.0` | 关节最大角速度 (rad/s)，按真实 dt 换算单步限幅 |
+| `JOINT_SMOOTH_TAU_S` | `0.05` | 关节命令一阶平滑时间常数 (s) |
 | `MAX_POS_SPEED` | `0.8` | 位置速度上限 (m/s) |
-| `JOINT_INTERP_ALPHA` | `0.75` | 关节插值系数（越大越跟手） |
-| `MAX_ROT_RANGE_RAD` | `60°` | 姿态朝前保护范围 |
+| `POS_SMOOTH_TAU_S` | `0.045` | 位置输入低通时间常数 (s) |
+| `ROT_SMOOTH_TAU_S` | `0.06` | 姿态输入低通时间常数 (s) |
+| `MAX_ROT_RANGE_RAD` | `120°` | 姿态朝前保护范围 |
 | `TCP_OFFSET_POSE` | `[0,0,0,0,0,π/2]` | ee 帧相对法兰 Z 转 90° |
 | `INIT_JOINTS` | `[0, 0.35, -0.35, 0, 0, 0]` | 初始关节角 |
 | `INIT_ABS_X/Y/Z` | `None` | 绝对末端初始 XYZ |
@@ -303,4 +311,15 @@ sudo ip link set can1 up
 
 ### 9.5 运动偏慢 / 偏快
 
-可调：`SCALE_FACTOR`、`MAX_POS_SPEED`、`JOINT_INTERP_ALPHA`、脚本内 `set_speed_percent(60)`。
+可调：`SCALE_FACTOR`、`MAX_POS_SPEED`、`MAX_JOINT_VEL_RADPS`、`JOINT_SMOOTH_TAU_S`、脚本内 `set_speed_percent(60)`。
+
+### 9.6 提高频率后仍然发抖
+
+1. 先看终端 `[频率监测]` 打印的**实际**频率，确认是否达到额定值（尤其双臂+双手场景，
+   若实际控制频率远低于 200Hz 且很不稳定，说明是双臂 CAN/QP 求解耗时瓶颈，
+   建议把 `CMD_RATE_HZ` 调到实测能稳定达到的值，而不是一味调高额定值）。
+2. WebXR 侧实际帧率受 PICO 头显原生刷新率上限（常见 72/90Hz）约束，
+   `index.html` 已在进入 AR 时尝试 `session.updateTargetFrameRate()` 提到最高档，
+   若浏览器不支持该 API 会保持原生默认刷新率，`TARGET_FPS` 只是发送侧的节流上限。
+3. 若确认频率已达标但仍有细微抖动，可适当调大 `POS_SMOOTH_TAU_S` / `ROT_SMOOTH_TAU_S` /
+   `JOINT_SMOOTH_TAU_S`（更平滑但更滞后），或调小 `MAX_JOINT_VEL_RADPS` / `MAX_POS_SPEED`。

@@ -24,14 +24,16 @@ from teleop_piper_webxr import (  # noqa: E402
 from teleop_state_bridge import hand_registers_to_radians  # noqa: E402
 
 
-HAND_MIN_POSITION = 0.2          # 扳机松开时手的归一化位置下限（0=全张, 1=全握）
-HAND_MAX_POSITION = 0.95         # 扳机按满时手的归一化位置上限
+HAND_MIN_POSITION = 0.05         # 扳机松开时的 alpha（0=全张, 1=全握）；应接近 0 才能默认张开
+HAND_MAX_POSITION = 0.6          # 扳机按满时的 alpha；0.6=握至约六成闭合，非全握
+# RH56H1 软限位最小角度（0.1° 寄存器值），与 InspireHandSDK_Y Rh56H1Profile::limits_.angle_min 一致
+RH56H1_FULL_CLOSE_POSE = [870, 870, 870, 870, 950, 700]
 HAND_CMD_DEADBAND = 0.02         # 归一化位置变化小于该值则不下发
 HAND_CMD_MIN_INTERVAL_S = 0.05   # 手命令最小间隔
 
 
 class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
-    """双臂 + 双灵巧手 WebXR 遥操作（Trigger 控制半张/张开）。"""
+    """双臂 + 双灵巧手 WebXR 遥操作（Trigger 线性控制张合）。"""
 
     def __init__(
         self,
@@ -115,8 +117,28 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         self._ih = ih
         return ih
 
+    def _resolve_hand_poses(self, ih) -> tuple[list[int], list[int]]:
+        """解析张开/全握姿态；优先使用 SDK 的 full_close_pose，未编译时回退到常量。"""
+        open_pose = list(ih.Hand.default_open_pose())
+        if hasattr(ih.Hand, "full_close_pose"):
+            close_pose = list(ih.Hand.full_close_pose())
+        else:
+            close_pose = list(RH56H1_FULL_CLOSE_POSE)
+            print(
+                "[Hand] 提示: inspire_hand_py 尚无 full_close_pose()，"
+                "已使用内置全握姿态；建议重新编译 SDK："
+                "cd InspireHandSDK_Y && cmake --build build --target inspire_hand_py"
+            )
+        return open_pose, close_pose
+
     def _trigger_to_hand_alpha(self, trigger: float) -> float:
-        """将扳机 [0,1] 线性映射到 [hand_min_position, hand_max_position]。"""
+        """
+        将扳机 [0,1] 线性映射到 [hand_min_position, hand_max_position]。
+
+        alpha 语义：0=全张姿态，1=全握姿态（见 _lerp_hand_pose）。
+        因此 hand_min_position 应接近 0（扳机松开≈张开），
+        hand_max_position 应接近 1（扳机按满≈握紧）。
+        """
         t = max(0.0, min(float(trigger), 1.0))
         lo = self.hand_min_position
         hi = self.hand_max_position
@@ -144,8 +166,10 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
             print("[Hand] 已禁用灵巧手控制（--disable-hands）")
             return
         ih = self._load_inspire_binding()
-        self._hand_open_pose = list(ih.Hand.default_open_pose())
-        self._hand_close_pose = list(ih.Hand.half_close_pose())
+        self._hand_open_pose, self._hand_close_pose = self._resolve_hand_poses(ih)
+        print(
+            f"[Hand] 姿态端点: 全张={self._hand_open_pose}, 全握={self._hand_close_pose}"
+        )
         for side in self.active_hands:
             info = self.dex_hands[side]
             dev = None
@@ -271,7 +295,8 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
     async def ws_loop(self):
         print(
             "[Hand] 控制规则：Trigger 线性映射 -> "
-            f"手位置 [{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]（0=全张, 1=半握）"
+            f"alpha [{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]"
+            "（松开≈全张, 按满≈六成握）"
         )
         await super().ws_loop()
 
@@ -324,13 +349,13 @@ def parse_args():
         "--hand-min-position",
         type=float,
         default=HAND_MIN_POSITION,
-        help="扳机松开时手的归一化位置下限（默认 0.2，范围 0~1）",
+        help="扳机松开时的 alpha（默认 0.05，0=全张；勿设大值否则默认会半握）",
     )
     parser.add_argument(
         "--hand-max-position",
         type=float,
         default=HAND_MAX_POSITION,
-        help="扳机按满时手的归一化位置上限（默认 0.95，范围 0~1）",
+        help="扳机按满时的 alpha（默认 0.6，1=全握）",
     )
     parser.add_argument("--hand-control-hz", type=int, default=200, help="灵巧手控制线程频率")
     parser.add_argument("--hand-io-hz", type=int, default=30, help="灵巧手 IO 线程频率")

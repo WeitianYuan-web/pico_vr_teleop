@@ -148,7 +148,7 @@
         let seq = 0, frameCount = 0, fpsCounter = 0;
         let lastFpsTime = performance.now();
         let lastSendTime = 0;
-        const TARGET_FPS = 45;
+        const TARGET_FPS = 90;
         const SEND_INTERVAL = 1000 / TARGET_FPS;
         const f3 = (val) => Math.round(val * 1000) / 1000;
 
@@ -272,8 +272,24 @@
                 session.addEventListener('end', () => { statusEl.innerText = "已退出 AR"; });
                 await renderer.xr.setSession(session);
                 setEnvironmentVisible(false);
+
+                // 尝试将设备刷新率提升到 90Hz（若设备/浏览器支持），
+                // 这样 setAnimationLoop 才有机会以 90Hz 触发数据发送，
+                // 否则 TARGET_FPS 只是发送侧的上限，仍会被原生刷新率（常见 72Hz）卡住。
+                let actualHz = 'unknown';
+                try {
+                    const rates = session.supportedFrameRates;
+                    if (rates && rates.length) {
+                        const best = rates.reduce((a, b) => (b > a ? b : a));
+                        await session.updateTargetFrameRate(best);
+                        actualHz = best;
+                    }
+                } catch (e) {
+                    console.warn('updateTargetFrameRate 不支持或失败:', e.message);
+                }
+
                 const blend = session.environmentBlendMode || 'unknown';
-                statusEl.innerText = `透视 AR 运行中 (blend=${blend})，坐标系已叠加`;
+                statusEl.innerText = `透视 AR 运行中 (blend=${blend}, 刷新率≈${actualHz}Hz)，坐标系已叠加`;
             } catch (e) {
                 alert(`进入 immersive-ar 失败: ${e.message}`);
             }
