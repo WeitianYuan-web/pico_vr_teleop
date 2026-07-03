@@ -203,6 +203,10 @@ class WebXRPiperPlacoTeleop:
         rotation_scale: float = ROTATION_SCALE,
         tcp_offset_pose=None,
         hands=HANDS,
+        publish_state: bool = False,
+        state_udp_host: str = "127.0.0.1",
+        state_udp_port: int = 17981,
+        state_publish_hz: float = 50.0,
     ):
         self.active_hands = tuple(hands)
         self.left_can_port = left_can_port
@@ -257,6 +261,84 @@ class WebXRPiperPlacoTeleop:
         self.R_headset_world = R_HEADSET_TO_WORLD.copy()
         self.T_flange_tcp = pose6_to_transform(self.tcp_offset_pose)
         self.T_tcp_flange = np.linalg.inv(self.T_flange_tcp)
+        self.state_publish_hz = max(1.0, float(state_publish_hz))
+        self._state_publish_interval = 1.0 / self.state_publish_hz
+        self._last_state_publish_time = 0.0
+        self.state_sender = None
+        if publish_state:
+            publisher_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../publisher"))
+            if publisher_dir not in sys.path:
+                sys.path.insert(0, publisher_dir)
+            from teleop_state_bridge import TeleopStateSender
+
+            self.state_sender = TeleopStateSender(state_udp_host, state_udp_port)
+            print(
+                f"[Publisher] 状态上报已启用: udp://{state_udp_host}:{state_udp_port} "
+                f"@ {self.state_publish_hz:.0f}Hz"
+            )
+
+    def _collect_arm_state(self, side: str) -> dict | None:
+        if side not in self.active_hands:
+            return None
+        arm = self.arms[side]
+        if arm.robot is None or arm.qp_ik is None:
+            return None
+        pose = self._robot_pose(arm)
+        if pose is None:
+            return None
+        pos, rot, q = pose
+        quat_wxyz = matrix_to_quat_wxyz(rot)
+        return {
+            "arm_valid": True,
+            "arm_joints": [float(v) for v in q],
+            "end_pose": {
+                "x": float(pos[0]),
+                "y": float(pos[1]),
+                "z": float(pos[2]),
+                "qx": float(quat_wxyz[1]),
+                "qy": float(quat_wxyz[2]),
+                "qz": float(quat_wxyz[3]),
+                "qw": float(quat_wxyz[0]),
+            },
+        }
+
+    def _collect_hand_state(self, side: str) -> dict | None:
+        return None
+
+    def _merge_side_state(self, side: str) -> dict | None:
+        arm = self._collect_arm_state(side)
+        hand = self._collect_hand_state(side)
+        if arm is None and hand is None:
+            return None
+        merged = {
+            "arm_valid": arm is not None,
+            "hand_valid": hand is not None,
+            "arm_joints": arm["arm_joints"] if arm else [0.0] * 6,
+            "end_pose": (
+                arm["end_pose"]
+                if arm
+                else {"x": 0.0, "y": 0.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
+            ),
+            "hand_joints": hand["hand_joints"] if hand else [0.0] * 6,
+        }
+        return merged
+
+    def _build_state_snapshot(self) -> dict:
+        payload = {"stamp": time.time(), "left": None, "right": None}
+        for side in HANDS:
+            side_state = self._merge_side_state(side)
+            if side_state is not None:
+                payload[side] = side_state
+        return payload
+
+    def _maybe_publish_state(self):
+        if self.state_sender is None:
+            return
+        now = time.time()
+        if now - self._last_state_publish_time < self._state_publish_interval:
+            return
+        self.state_sender.send_dict(self._build_state_snapshot())
+        self._last_state_publish_time = now
 
     def _transform_xr_controller(self, vr_pos: np.ndarray, qx: float, qy: float, qz: float, qw: float):
         """将 WebXR 手柄位姿变换到机器人世界坐标系（对齐 XRoboToolkit _process_xr_pose）。"""
@@ -666,6 +748,7 @@ class WebXRPiperPlacoTeleop:
             if self._latest_vr_data is not None:
                 for hand in self.active_hands:
                     self.process_vr_data(self._latest_vr_data, hand)
+            self._maybe_publish_state()
             await asyncio.sleep(interval)
 
     def run(self):
@@ -675,6 +758,8 @@ class WebXRPiperPlacoTeleop:
         except KeyboardInterrupt:
             print("\n[System] 收到退出信号")
         finally:
+            if self.state_sender is not None:
+                self.state_sender.close()
             for hand in self.active_hands:
                 arm = self.arms[hand]
                 if arm.robot is None:
@@ -739,6 +824,10 @@ def parse_args():
         default="0,0,0,0,0,0",
         help="TCP 偏移(法兰坐标系) x,y,z,roll,pitch,yaw；单位 m/rad",
     )
+    parser.add_argument("--publish-state", action="store_true", help="向 publisher 上报臂/手状态（UDP）")
+    parser.add_argument("--state-udp-host", default="127.0.0.1", help="状态上报目标主机")
+    parser.add_argument("--state-udp-port", type=int, default=17981, help="状态上报目标端口")
+    parser.add_argument("--state-publish-hz", type=float, default=50.0, help="状态上报频率 Hz")
     return parser.parse_args()
 
 
@@ -766,4 +855,8 @@ if __name__ == "__main__":
         rotation_scale=args.rotation_scale,
         tcp_offset_pose=_parse_pose6(args.tcp_offset),
         hands=hands,
+        publish_state=args.publish_state,
+        state_udp_host=args.state_udp_host,
+        state_udp_port=args.state_udp_port,
+        state_publish_hz=args.state_publish_hz,
     ).run()
