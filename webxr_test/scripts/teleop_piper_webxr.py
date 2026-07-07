@@ -18,7 +18,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../p
 try:
     from pyAgxArm import AgxArmFactory, create_agx_arm_config
     from piper_placo_qp_ik import PiperPlacoConfig, PiperPlacoQPIK, pose6_to_transform, transform_to_pose6
-    from run_piper_control import detect_firmware_version, resolve_can_backend, wait_motion_done
+    from run_piper_control import (
+        detect_firmware_version,
+        resolve_can_backend,
+        wait_motion_done,
+        wait_robot_comm_ready,
+    )
 except ImportError as exc:
     print(f"导入依赖失败: {exc}")
     sys.exit(1)
@@ -52,6 +57,8 @@ ELBOW_WEIGHT = 0.02                  # 肘部偏好任务权重（0 关闭）
 INIT_JOINTS = [0.0, 1.3, -0.9, 0.0, 0.5, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
 INIT_JOINT_TIMEOUT = 6.0
 INIT_JOINT_SETTLE = 0.5
+INIT_COMM_READY_TIMEOUT = 15.0   # 冷启动后等待 CAN 通信稳定的最长时间
+INIT_POST_ENABLE_SETTLE = 0.3    # enable + 模式切换后短暂 settle，再发 move_j
 INIT_ABS_X = None  # 例如 0.25；None 表示保持当前
 INIT_ABS_Y = None  # 例如 0.00
 INIT_ABS_Z = None  # 例如 0.20
@@ -463,7 +470,11 @@ class WebXRPiperPlacoTeleop:
             return False
         print(f"\n[Robot-{arm.hand}] {label}：阶段1 move_j -> {INIT_JOINTS}")
         arm.robot.move_j(INIT_JOINTS)
-        reached = wait_motion_done(arm.robot, timeout=INIT_JOINT_TIMEOUT)
+        reached = wait_motion_done(
+            arm.robot,
+            timeout=INIT_JOINT_TIMEOUT,
+            target_joints=INIT_JOINTS,
+        )
         if reached:
             print(f"[Robot-{arm.hand}] {label}：阶段1到位")
         else:
@@ -488,6 +499,7 @@ class WebXRPiperPlacoTeleop:
         arm.robot.move_j(q_sol.tolist())
         xyz = home_tcp_T[:3, 3]
         print(f"[Robot-{arm.hand}] {label}：阶段2 绝对末端 XYZ=({xyz[0]:.3f}, {xyz[1]:.3f}, {xyz[2]:.3f})")
+        wait_motion_done(arm.robot, timeout=INIT_JOINT_TIMEOUT, target_joints=q_sol.tolist())
         if INIT_ABS_WAIT > 0:
             time.sleep(INIT_ABS_WAIT)
         return True
@@ -542,9 +554,13 @@ class WebXRPiperPlacoTeleop:
         while not arm.robot.enable():
             time.sleep(0.01)
         print(f"[Robot-{arm.hand}] 已使能")
+        if not wait_robot_comm_ready(arm.robot, timeout=INIT_COMM_READY_TIMEOUT):
+            print(f"[Robot-{arm.hand}] 警告: 通信未在 {INIT_COMM_READY_TIMEOUT:.0f}s 内稳定，仍尝试初始化")
         arm.robot.set_speed_percent(60)
         arm.robot.set_installation_pos(arm.robot.OPTIONS.INSTALLATION_POS.HORIZONTAL)
         arm.robot.set_motion_mode(arm.robot.OPTIONS.MOTION_MODE.J)
+        if INIT_POST_ENABLE_SETTLE > 0:
+            time.sleep(INIT_POST_ENABLE_SETTLE)
         self._move_to_init_joints(arm, label="启动初始化")
         try:
             arm.gripper = arm.robot.init_effector(arm.robot.OPTIONS.EFFECTOR.AGX_GRIPPER)

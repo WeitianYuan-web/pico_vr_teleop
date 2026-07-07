@@ -40,6 +40,8 @@ if [[ "${DO_CAN_ACTIVATE}" -eq 1 ]]; then
       echo "[Launcher] CAN ${port} 已激活，跳过"
     fi
   done
+  echo "[Launcher] CAN 激活后等待 1.5s，确保总线/机械臂就绪 ..."
+  sleep 1.5
 fi
 
 echo "[Launcher] 使用解释器: ${PYTHON_BIN}"

@@ -225,6 +225,12 @@ echo "[Launcher] 运行时: source ROS + source .venv/bin/activate"
 
 activate_can_ports
 
+# 冷启动后 USB-CAN 与机械臂控制器需要短暂稳定时间
+if [[ "${DO_CAN_ACTIVATE}" -eq 1 && "${DO_TELEOP}" -eq 1 ]]; then
+  echo "[Launcher] CAN 激活后等待 1.5s，确保总线/机械臂就绪 ..."
+  sleep 1.5
+fi
+
 if [[ "${DO_VR_SERVER}" -eq 1 ]]; then
   if [[ ! -f "${WEBXR_DIR}/cert.pem" || ! -f "${WEBXR_DIR}/key.pem" ]]; then
     echo "[警告] 未找到 ${WEBXR_DIR}/cert.pem 或 key.pem，WebXR 服务可能启动失败。"

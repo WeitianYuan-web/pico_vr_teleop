@@ -18,7 +18,7 @@ import numpy as np
 
 from pyAgxArm import AgxArmFactory, create_agx_arm_config
 from piper_placo_qp_ik import PiperPlacoConfig, PiperPlacoQPIK, transform_to_pose6
-from run_piper_control import detect_firmware_version, resolve_can_backend, wait_motion_done
+from run_piper_control import detect_firmware_version, resolve_can_backend, wait_motion_done, wait_robot_comm_ready
 
 try:
     import pinocchio as pin
@@ -213,15 +213,19 @@ def main():
     while not robot.enable():
         time.sleep(0.01)
 
+    if not wait_robot_comm_ready(robot, timeout=15.0):
+        print("警告: 通信未在 15s 内稳定，仍尝试初始化")
+
     robot.set_speed_percent(max(1, min(args.speed, 100)))
     robot.set_installation_pos(robot.OPTIONS.INSTALLATION_POS.HORIZONTAL)
     robot.set_motion_mode(robot.OPTIONS.MOTION_MODE.J)
+    time.sleep(0.3)
 
     # 第一步：先以 move_j 到指定绝对关节角（手臂抬起）
     init_joints = _parse_init_joints(args.init_joints)
     print(f"初始关节姿态(move_j, absolute): {init_joints}")
     robot.move_j(init_joints)
-    reached = wait_motion_done(robot, timeout=args.init_joint_timeout)
+    reached = wait_motion_done(robot, timeout=args.init_joint_timeout, target_joints=init_joints)
     if reached:
         print("初始关节姿态已到位")
     else:
