@@ -45,4 +45,4 @@ if [[ "${DO_CAN_ACTIVATE}" -eq 1 ]]; then
 fi
 
 echo "[Launcher] 使用解释器: ${PYTHON_BIN}"
-exec "${PYTHON_BIN}" "${PROJECT_DIR}/control/dual_arm_dual_hand_webxr.py" "${ARGS[@]}"
+exec "${PYTHON_BIN}" "${PROJECT_DIR}/vr_teleop/piper_dual_webxr.py" "${ARGS[@]}"

@@ -15,6 +15,7 @@ DO_VR_SERVER=1
 DO_TELEOP=1
 DO_PUBLISHER=1
 TELEOP_ARGS=()
+BACKEND="${TELEOP_BACKEND:-piper}"
 
 # ROS 环境：优先 ROS_SETUP，其次自动探测常见发行版
 ROS_SETUP="${ROS_SETUP:-}"
@@ -33,23 +34,26 @@ usage() {
 
 一键启动:
   1) WebXR HTTPS/WSS 服务 (server.py)
-  2) 双臂双手遥操作 (dual_arm_dual_hand_webxr.py)
+  2) 遥操作 (backend 可选 piper/jaka)
   3) ROS 发布节点 (teleop_realsense_publisher.py)
 
 选项:
   --no-can-activate     跳过 can0/can1 自动激活
+  --backend <name>      选择遥操作后端: piper | jaka（默认 piper）
   --no-vr-server        不启动 WebXR 服务
   --no-teleop           不启动遥操作
   --no-publisher        不启动 ROS 发布节点
   -h, --help            显示帮助
 
 环境变量:
+  TELEOP_BACKEND        遥操作后端（默认 piper）
   ROS_SETUP             ROS setup.bash 路径（默认自动探测）
   CAN_BITRATE           CAN 波特率（默认 1000000）
   ROS_ARGS              传给 publisher 的 ros-args 字符串
 
 示例:
   $(basename "$0")
+  $(basename "$0") --backend jaka
   $(basename "$0") -- --left-hand-port /dev/ttyUSB0 --right-hand-port /dev/ttyUSB1
   ROS_ARGS="-p camera_f_serial:=xxxx" $(basename "$0")
 EOF
@@ -63,6 +67,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-vr-server)
       DO_VR_SERVER=0
+      shift
+      ;;
+    --backend)
+      BACKEND="$2"
+      shift 2
+      ;;
+    --backend=*)
+      BACKEND="${1#*=}"
       shift
       ;;
     --no-teleop)
@@ -88,6 +100,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" ]]; then
+  echo "[错误] --backend 仅支持 piper 或 jaka，当前: ${BACKEND}"
+  exit 1
+fi
 
 if [[ ! -x "${VENV_PYTHON}" || ! -f "${VENV_ACTIVATE}" ]]; then
   echo "[错误] 未找到虚拟环境: ${VENV_DIR}"
@@ -171,6 +188,9 @@ activate_one_can_port() {
 }
 
 activate_can_ports() {
+  if [[ "${BACKEND}" != "piper" ]]; then
+    return 0
+  fi
   if [[ "${DO_CAN_ACTIVATE}" -ne 1 || "${DO_TELEOP}" -ne 1 ]]; then
     return 0
   fi
@@ -226,7 +246,7 @@ echo "[Launcher] 运行时: source ROS + source .venv/bin/activate"
 activate_can_ports
 
 # 冷启动后 USB-CAN 与机械臂控制器需要短暂稳定时间
-if [[ "${DO_CAN_ACTIVATE}" -eq 1 && "${DO_TELEOP}" -eq 1 ]]; then
+if [[ "${BACKEND}" == "piper" && "${DO_CAN_ACTIVATE}" -eq 1 && "${DO_TELEOP}" -eq 1 ]]; then
   echo "[Launcher] CAN 激活后等待 1.5s，确保总线/机械臂就绪 ..."
   sleep 1.5
 fi
@@ -259,14 +279,28 @@ if [[ "${DO_PUBLISHER}" -eq 1 ]]; then
 fi
 
 if [[ "${DO_TELEOP}" -eq 1 ]]; then
-  echo "[Launcher] 启动遥操作（前台）: dual_arm_dual_hand_webxr.py ${TELEOP_ARGS[*]:-}"
+  if [[ "${BACKEND}" == "jaka" ]]; then
+    TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/jaka_dual_webxr.py"
+  else
+    TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/piper_dual_webxr.py"
+  fi
+  echo "[Launcher] 遥操作后端: ${BACKEND}"
+  echo "[Launcher] 启动遥操作（前台）: ${TELEOP_ENTRY} ${TELEOP_ARGS[*]:-}"
   echo "[Launcher] 状态默认上报 UDP 127.0.0.1:17981 -> publisher"
   echo "[Launcher] PICO 访问页面见 ${LOG_DIR}/vr_server.log 中的 HTTPS 地址"
   echo "------------------------------------------------------------"
   (
     activate_runtime_env
     cd "${PROJECT_DIR}"
-    exec python "${PROJECT_DIR}/control/dual_arm_dual_hand_webxr.py" "${TELEOP_ARGS[@]}"
+    if [[ "${BACKEND}" == "jaka" ]]; then
+      JAKA_SDK_DIR="${PROJECT_DIR}/jaka_control/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
+      if [[ -d "${JAKA_SDK_DIR}" ]]; then
+        export LD_LIBRARY_PATH="${JAKA_SDK_DIR}:${LD_LIBRARY_PATH:-}"
+      else
+        echo "[Launcher] 警告: 未找到 JAKA SDK 目录: ${JAKA_SDK_DIR}"
+      fi
+    fi
+    exec python "${TELEOP_ENTRY}" "${TELEOP_ARGS[@]}"
   )
 else
   echo "[Launcher] 后台服务已启动。按 Ctrl+C 退出并停止所有进程。"
