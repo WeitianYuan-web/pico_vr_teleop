@@ -34,12 +34,12 @@ usage() {
 
 一键启动:
   1) WebXR HTTPS/WSS 服务 (server.py)
-  2) 遥操作 (backend 可选 piper/jaka)
+  2) 遥操作 (backend 可选 piper/jaka/g1)
   3) ROS 发布节点 (teleop_realsense_publisher.py)
 
 选项:
   --no-can-activate     跳过 can0/can1 自动激活
-  --backend <name>      选择遥操作后端: piper | jaka（默认 piper）
+  --backend <name>      选择遥操作后端: piper | jaka | g1（默认 piper）
   --no-vr-server        不启动 WebXR 服务
   --no-teleop           不启动遥操作
   --no-publisher        不启动 ROS 发布节点
@@ -54,6 +54,7 @@ usage() {
 示例:
   $(basename "$0")
   $(basename "$0") --backend jaka
+  $(basename "$0") --backend g1 -- --motion --network-interface enp12s0
   $(basename "$0") -- --left-hand-port /dev/ttyUSB0 --right-hand-port /dev/ttyUSB1
   ROS_ARGS="-p camera_f_serial:=xxxx" $(basename "$0")
 EOF
@@ -101,8 +102,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" ]]; then
-  echo "[错误] --backend 仅支持 piper 或 jaka，当前: ${BACKEND}"
+if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" ]]; then
+  echo "[错误] --backend 仅支持 piper / jaka / g1，当前: ${BACKEND}"
   exit 1
 fi
 
@@ -281,6 +282,8 @@ fi
 if [[ "${DO_TELEOP}" -eq 1 ]]; then
   if [[ "${BACKEND}" == "jaka" ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/jaka_dual_webxr.py"
+  elif [[ "${BACKEND}" == "g1" ]]; then
+    TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/g1_dual_webxr.py"
   else
     TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/piper_dual_webxr.py"
   fi
@@ -298,6 +301,10 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
         export LD_LIBRARY_PATH="${JAKA_SDK_DIR}:${LD_LIBRARY_PATH:-}"
       else
         echo "[Launcher] 警告: 未找到 JAKA SDK 目录: ${JAKA_SDK_DIR}"
+      fi
+    elif [[ "${BACKEND}" == "g1" ]]; then
+      if [[ -n "${UNITREE_SDK2_PYTHON:-}" && -d "${UNITREE_SDK2_PYTHON}" ]]; then
+        export PYTHONPATH="${UNITREE_SDK2_PYTHON}:${PYTHONPATH:-}"
       fi
     fi
     exec python "${TELEOP_ENTRY}" "${TELEOP_ARGS[@]}"

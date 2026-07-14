@@ -1,0 +1,8 @@
+# Unitree SDK 需从源码安装（PyPI 无官方包）:
+#   git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+#   pip install -e ./unitree_sdk2_python
+# 依赖 CycloneDDS 0.10.x，详见官方 README。
+
+numpy>=1.24
+pinocchio
+websockets>=12.0
