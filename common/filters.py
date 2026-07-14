@@ -1,8 +1,55 @@
-"""加权滑动平均滤波（关节目标平滑）。"""
+"""滤波工具：EMA、固定 alpha、加权滑动平均。"""
 
 from __future__ import annotations
 
 import numpy as np
+
+from common.math_quat import slerp_quat_wxyz
+
+
+def time_based_alpha(dt: float, tau: float) -> float:
+    """将时间常数 tau（秒）换算为当前 dt 下的一阶平滑系数。"""
+    if tau <= 0.0:
+        return 1.0
+    return 1.0 - float(np.exp(-dt / tau))
+
+
+class EMAFilter:
+    """基于时间常数 tau（秒）的一阶低通，每次 update 需传入真实 dt。"""
+
+    def __init__(self, tau: float = 0.05):
+        self.tau = tau
+        self.value = None
+
+    def reset(self) -> None:
+        self.value = None
+
+    def update(self, x: np.ndarray, dt: float) -> np.ndarray:
+        if self.value is None:
+            self.value = np.asarray(x, dtype=float).copy()
+        else:
+            alpha = time_based_alpha(dt, self.tau)
+            self.value = alpha * x + (1.0 - alpha) * self.value
+        return self.value
+
+
+def lerp_position(prev: np.ndarray | None, raw: np.ndarray, alpha: float) -> np.ndarray:
+    """固定 alpha 的位置一阶低通。"""
+    alpha = float(np.clip(alpha, 0.0, 1.0))
+    if prev is None or alpha >= 0.999:
+        return np.asarray(raw, dtype=float).copy()
+    return (1.0 - alpha) * prev + alpha * raw
+
+
+def slerp_filter_quat(prev: np.ndarray | None, raw: np.ndarray, alpha: float) -> np.ndarray:
+    """固定 alpha 的姿态 slerp 滤波（自动半球对齐）。"""
+    alpha = float(np.clip(alpha, 0.0, 1.0))
+    raw = np.asarray(raw, dtype=float).copy()
+    if prev is None or alpha >= 0.999:
+        return raw
+    if np.dot(prev, raw) < 0.0:
+        raw = -raw
+    return slerp_quat_wxyz(prev, raw, alpha)
 
 
 class WeightedMovingFilter:
@@ -45,7 +92,7 @@ class WeightedMovingFilter:
     def pin_indices(self, indices: slice | np.ndarray | list[int], values: np.ndarray) -> None:
         """
         /**
-         * @brief 将指定维度钉死为给定值，并同步滑动窗口（避免锁臂残差渗入滤波）
+         * @brief 将指定维度钉死为给定值，并同步滑动窗口
          */
         """
         values = np.asarray(values, dtype=float).reshape(-1)

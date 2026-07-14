@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
-JAKA_SDK_DIR="${PROJECT_DIR}/jaka_control/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
+JAKA_SDK_DIR="${PROJECT_DIR}/backends/jaka/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
 
 if [[ ! -x "${PYTHON_BIN}" ]]; then
   echo "错误: 未找到虚拟环境 ${PYTHON_BIN}"
@@ -19,4 +19,4 @@ else
 fi
 
 echo "[Launcher] 使用解释器: ${PYTHON_BIN}"
-exec "${PYTHON_BIN}" "${PROJECT_DIR}/vr_teleop/jaka_dual_webxr.py" "$@"
+exec "${PYTHON_BIN}" "${PROJECT_DIR}/entrypoints/jaka_dual_webxr.py" "$@"

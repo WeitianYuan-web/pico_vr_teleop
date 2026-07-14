@@ -1,6 +1,6 @@
 # WebXR -> Piper 遥操作说明（Placo QP 版）
 
-本文档对应脚本：`pico_vr_teleop/webxr_test/scripts/teleop_piper_webxr.py`  
+本文档对应脚本：`pico_entrypoints/backends/piper/teleop/teleop_piper_webxr.py`  
 目标：用 PICO WebXR 手柄遥操作 Piper 机械臂（`move_j`），支持单臂/双臂，并保证稳定性与安全性。
 
 ---
@@ -9,10 +9,10 @@
 
 当前链路：
 
-- 前端采集：`webxr_test/index.html`（WebXR 上传额定 **90 Hz**，实际取决于头显原生刷新率）
-- 数据服务：`webxr_test/server.py`（WSS 8081）
-- 机械臂控制：`webxr_test/scripts/teleop_piper_webxr.py`（控制环额定 **200 Hz**）
-- IK 后端：`pyAgxArm/piper_placo_qp_ik.py`（Placo 多任务加权 QP）
+- 前端采集：`webxr/index.html`（WebXR 上传额定 **90 Hz**，实际取决于头显原生刷新率）
+- 数据服务：`webxr/server.py`（WSS 8081）
+- 机械臂控制：`backends/piper/teleop/teleop_piper_webxr.py`（控制环额定 **200 Hz**）
+- IK 后端：`third_party/pyAgxArm/piper_placo_qp_ik.py`（Placo 多任务加权 QP）
 
 > 额定频率仅为循环节拍上限，真实达到的频率会在终端每 3 秒打印一次
 > `[频率监测] ... 实际帧率/实际频率 ≈ xx.x Hz`，请以此为准。所有限速、平滑
@@ -62,8 +62,8 @@
 ### 2.1 启动 WebXR 数据服务
 
 ```bash
-cd /home/b0106/pico_test/pico_vr_teleop/webxr_test
-/home/b0106/pico_test/pico_vr_teleop/.venv/bin/python server.py
+cd /home/b0106/pico_test/pico_entrypoints/webxr
+/home/b0106/pico_test/pico_entrypoints/.venv/bin/python server.py
 ```
 
 ### 2.2 PICO 打开采集页并进入 VR
@@ -78,7 +78,7 @@ https://<你的电脑IP>:8000/index.html
 
 ### 2.3 启动机械臂控制脚本
 
-推荐使用项目内启动脚本（会固定使用 `pico_vr_teleop/.venv`）：
+推荐使用项目内启动脚本（会固定使用 `pico_entrypoints/.venv`）：
 
 ```bash
 cd /home/b0106/pico_test/pico_vr_teleop
@@ -106,10 +106,10 @@ cd /home/b0106/pico_test/pico_vr_teleop
 ```bash
 cd /home/b0106/pico_test/pico_vr_teleop
 source .venv/bin/activate
-pip install -r pyAgxArm/requirements-teleop.txt
-pip install -e pyAgxArm
-cd webxr_test
-python scripts/teleop_piper_webxr.py --hands right --right-can-port can0
+pip install -r third_party/pyAgxArm/requirements-teleop.txt
+pip install -e third_party/pyAgxArm
+cd webxr
+python backends/piper/teleop/teleop_piper_webxr.py --hands right --right-can-port can0
 ```
 
 ---
@@ -279,13 +279,13 @@ CAN_BITRATE=500000 ./scripts/run_vr_teleop.sh --hands right --right-can-port can
 ./scripts/run_vr_teleop.sh --hands right --right-can-port can0 --no-can-activate
 ```
 
-自动激活会调用 `pico_vr_teleop/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh`（找不到会回退 linux 版本），需要 `sudo` 权限
+自动激活会调用 `pico_entrypoints/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh`（找不到会回退 linux 版本），需要 `sudo` 权限
 （首次可能提示输入密码）。
 
 手动激活（等效操作）：
 
 ```bash
-sudo bash /home/b0106/pico_test/pico_vr_teleop/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh can0 1000000
+sudo bash /home/b0106/pico_test/pico_entrypoints/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh can0 1000000
 # 或
 sudo ip link set can0 down
 sudo ip link set can0 type can bitrate 1000000 restart-ms 100

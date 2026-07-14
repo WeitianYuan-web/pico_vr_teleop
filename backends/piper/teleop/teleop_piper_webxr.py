@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
-import ssl
 import sys
 import time
 from types import SimpleNamespace
 
 import numpy as np
-import websockets
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pyAgxArm")))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+sys.path.append(os.path.join(_PROJECT_ROOT, "third_party", "pyAgxArm"))
 
 try:
     from pyAgxArm import AgxArmFactory, create_agx_arm_config
@@ -28,189 +28,43 @@ except ImportError as exc:
     print(f"导入依赖失败: {exc}")
     sys.exit(1)
 
-
-# 与 XRoboToolkit geometry.R_HEADSET_TO_WORLD 一致：头显/手柄坐标 -> 机器人世界坐标
-R_HEADSET_TO_WORLD = np.array(
-    [
-        [0, 0, -1],
-        [-1, 0, 0],
-        [0, 1, 0],
-    ],
-    dtype=float,
+from common.clutch import target_rotation_from_controller_rel
+from common.constants import BTN_A_INDEX, BTN_B_INDEX, DEFAULT_WS_URI, HANDS
+from common.coord_frames import HEADSET_TO_WORLD_X_FORWARD
+from common.filters import EMAFilter, time_based_alpha
+from common.math_quat import (
+    matrix_to_quat_wxyz,
+    quat_diff_as_angle_axis,
+    quat_wxyz_to_matrix,
 )
+from common.math_se3 import apply_delta_pose, transform_xr_controller
+from common.vr_input import is_button_pressed, rotation_enabled
+from common.ws_client import run_webxr_ws_loop
 
+R_HEADSET_TO_WORLD = HEADSET_TO_WORLD_X_FORWARD
 
-WS_URI = "wss://localhost:8081"
-HANDS = ("left", "right")
+WS_URI = DEFAULT_WS_URI
 SCALE_FACTOR = 1.0
 ROTATION_SCALE = 1.0
-CMD_RATE_HZ = 200                    # 控制频率 Hz（额定值，用于 QP dt 初始化；实际达到多少见 [频率监测] 打印）
-# 以下限速/平滑参数均改为“物理量（速度 rad/s、m/s）+ 时间常数 tau（秒）”的形式，
-# 按每次调用时测得的真实 dt 换算，与实际达到的控制频率解耦——频率提高只会让运动
-# 更连续（步子更细），不会改变整体跟手速度或滤波带宽，从而避免“调频率反而更抖”。
-MAX_JOINT_VEL_RADPS = 3.0            # 关节最大角速度 rad/s（与频率无关，按真实 dt 换算单步限幅）
-JOINT_SMOOTH_TAU_S = 0.05            # 关节命令一阶平滑时间常数 s（越大越平滑但越滞后）
-MAX_POS_SPEED = 0.8                  # 笛卡尔位置速度上限 m/s
-POS_SMOOTH_TAU_S = 0.045             # 位置输入低通时间常数 s
-ROT_SMOOTH_TAU_S = 0.06              # 姿态输入低通时间常数 s（比位置更平滑）
-ELBOW_WEIGHT = 0.02                  # 肘部偏好任务权重（0 关闭）
-INIT_JOINTS = [0.0, 1.3, -0.9, 0.0, 0.5, 0.0]  # 启动先 move_j 到抬起姿态（绝对关节角）
+CMD_RATE_HZ = 200
+MAX_JOINT_VEL_RADPS = 3.0
+JOINT_SMOOTH_TAU_S = 0.05
+MAX_POS_SPEED = 0.8
+POS_SMOOTH_TAU_S = 0.045
+ROT_SMOOTH_TAU_S = 0.06
+ELBOW_WEIGHT = 0.02
+INIT_JOINTS = [0.0, 1.3, -0.9, 0.0, 0.5, 0.0]
 INIT_JOINT_TIMEOUT = 6.0
 INIT_JOINT_SETTLE = 0.5
-INIT_COMM_READY_TIMEOUT = 15.0   # 冷启动后等待 CAN 通信稳定的最长时间
-INIT_POST_ENABLE_SETTLE = 0.3    # enable + 模式切换后短暂 settle，再发 move_j
-INIT_ABS_X = None  # 例如 0.25；None 表示保持当前
-INIT_ABS_Y = None  # 例如 0.00
-INIT_ABS_Z = None  # 例如 0.20
+INIT_COMM_READY_TIMEOUT = 15.0
+INIT_POST_ENABLE_SETTLE = 0.3
+INIT_ABS_X = None
+INIT_ABS_Y = None
+INIT_ABS_Z = None
 INIT_ABS_WAIT = 1.0
-BTN_A_INDEX = 4  # WebXR xr-standard：右手柄 A 键（按住时启用旋转）
-BTN_B_INDEX = 5  # WebXR xr-standard：右手柄 B 键
 HOME_COOLDOWN_S = 2.0
-# ee 帧 = link6 法兰帧绕 Z 轴转 90°（无平移偏置）
 TCP_OFFSET_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, np.pi / 2]
-# 姿态绝对控制：目标朝向偏离初始 ee 朝向的最大角度（朝前保护）
 MAX_ROT_RANGE_RAD = np.radians(120)
-
-
-def time_based_alpha(dt: float, tau: float) -> float:
-    """将时间常数 tau（秒）换算为当前 dt 下的一阶平滑系数，保证滤波带宽与调用频率无关。"""
-    if tau <= 0.0:
-        return 1.0
-    return 1.0 - float(np.exp(-dt / tau))
-
-
-class EMAFilter:
-    """基于时间常数 tau（秒）的一阶低通滤波器，每次 update 需传入真实 dt。"""
-
-    def __init__(self, tau: float = 0.05):
-        self.tau = tau
-        self.value = None
-
-    def update(self, x: np.ndarray, dt: float) -> np.ndarray:
-        if self.value is None:
-            self.value = x.copy()
-        else:
-            alpha = time_based_alpha(dt, self.tau)
-            self.value = alpha * x + (1.0 - alpha) * self.value
-        return self.value
-
-
-def matrix_to_quat_wxyz(rot: np.ndarray) -> np.ndarray:
-    """旋转矩阵转四元数 (w, x, y, z)。"""
-    m = rot
-    trace = np.trace(m)
-    if trace > 0.0:
-        s = np.sqrt(trace + 1.0) * 2.0
-        w = 0.25 * s
-        x = (m[2, 1] - m[1, 2]) / s
-        y = (m[0, 2] - m[2, 0]) / s
-        z = (m[1, 0] - m[0, 1]) / s
-    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
-        s = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
-        w = (m[2, 1] - m[1, 2]) / s
-        x = 0.25 * s
-        y = (m[0, 1] + m[1, 0]) / s
-        z = (m[0, 2] + m[2, 0]) / s
-    elif m[1, 1] > m[2, 2]:
-        s = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
-        w = (m[0, 2] - m[2, 0]) / s
-        x = (m[0, 1] + m[1, 0]) / s
-        y = 0.25 * s
-        z = (m[1, 2] + m[2, 1]) / s
-    else:
-        s = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
-        w = (m[1, 0] - m[0, 1]) / s
-        x = (m[0, 2] + m[2, 0]) / s
-        y = (m[1, 2] + m[2, 1]) / s
-        z = 0.25 * s
-    quat = np.array([w, x, y, z], dtype=float)
-    if quat[0] < 0.0:
-        quat = -quat
-    norm = np.linalg.norm(quat)
-    if norm < 1e-12:
-        return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-    return quat / norm
-
-
-def quat_multiply_wxyz(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    return np.array(
-        [
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-        ],
-        dtype=float,
-    )
-
-
-def quat_inverse_wxyz(quat: np.ndarray) -> np.ndarray:
-    w, x, y, z = quat
-    return np.array([w, -x, -y, -z], dtype=float)
-
-
-def quaternion_to_angle_axis(quat: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    q = np.array(quat, dtype=float, copy=True)
-    if q[0] < 0.0:
-        q = -q
-    angle = 2.0 * np.arccos(np.clip(q[0], -1.0, 1.0))
-    if angle < eps:
-        return np.zeros(3, dtype=float)
-    sin_half = np.sin(angle / 2.0)
-    if sin_half < eps:
-        return np.zeros(3, dtype=float)
-    axis = q[1:] / sin_half
-    return axis * angle
-
-
-def quat_diff_as_angle_axis(q1: np.ndarray, q2: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    delta_q = quat_multiply_wxyz(q2, quat_inverse_wxyz(q1))
-    return quaternion_to_angle_axis(delta_q, eps)
-
-
-def apply_delta_pose(
-    source_pos: np.ndarray,
-    source_rot_wxyz: np.ndarray,
-    delta_pos: np.ndarray,
-    delta_rot: np.ndarray,
-    eps: float = 1e-6,
-) -> tuple[np.ndarray, np.ndarray]:
-    """与 XRoboToolkit apply_delta_pose 一致：delta 左乘到 source 姿态。"""
-    target_pos = source_pos + delta_pos
-    angle = np.linalg.norm(delta_rot)
-    if angle > eps:
-        axis = delta_rot / angle
-        half = angle / 2.0
-        rot_delta = np.array([np.cos(half), *(axis * np.sin(half))], dtype=float)
-    else:
-        rot_delta = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-    target_rot = quat_multiply_wxyz(rot_delta, source_rot_wxyz)
-    return target_pos, target_rot
-
-
-def quat_wxyz_to_matrix(quat: np.ndarray) -> np.ndarray:
-    w, x, y, z = quat
-    return quat_xyzw_to_matrix(x, y, z, w)
-
-
-def quat_xyzw_to_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
-    n = x * x + y * y + z * z + w * w
-    if n < 1e-12:
-        return np.eye(3, dtype=float)
-    s = 2.0 / n
-    xx, yy, zz = x * x * s, y * y * s, z * z * s
-    xy, xz, yz = x * y * s, x * z * s, y * z * s
-    wx, wy, wz = w * x * s, w * y * s, w * z * s
-    return np.array(
-        [
-            [1.0 - (yy + zz), xy - wz, xz + wy],
-            [xy + wz, 1.0 - (xx + zz), yz - wx],
-            [xz - wy, yz + wx, 1.0 - (xx + yy)],
-        ],
-        dtype=float,
-    )
 
 
 class WebXRPiperPlacoTeleop:
@@ -239,11 +93,9 @@ class WebXRPiperPlacoTeleop:
         self.rotation_scale = rotation_scale
         self.tcp_offset_pose = list(TCP_OFFSET_POSE if tcp_offset_pose is None else tcp_offset_pose)
         if urdf_path is None:
-            urdf_path = os.path.abspath(
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "../../pyAgxArm/agx_arm_urdf-main/piper_h/urdf/piper_h_description.urdf",
-                )
+            urdf_path = os.path.join(
+                _PROJECT_ROOT,
+                "third_party/pyAgxArm/agx_arm_urdf-main/piper_h/urdf/piper_h_description.urdf",
             )
         self.urdf_path = urdf_path
 
@@ -294,7 +146,7 @@ class WebXRPiperPlacoTeleop:
         self._last_state_publish_time = 0.0
         self.state_sender = None
         if publish_state:
-            publisher_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../publisher"))
+            publisher_dir = os.path.join(_PROJECT_ROOT, "publisher")
             if publisher_dir not in sys.path:
                 sys.path.insert(0, publisher_dir)
             from teleop_state_bridge import TeleopStateSender
@@ -370,15 +222,16 @@ class WebXRPiperPlacoTeleop:
 
     def _transform_xr_controller(self, vr_pos: np.ndarray, qx: float, qy: float, qz: float, qw: float):
         """将 WebXR 手柄位姿变换到机器人世界坐标系（对齐 XRoboToolkit _process_xr_pose）。"""
-        controller_xyz = self.R_headset_world @ vr_pos
-        controller_quat_wxyz = np.array([qw, qx, qy, qz], dtype=float)
-
-        r_quat_wxyz = matrix_to_quat_wxyz(self.R_headset_world)
-        controller_quat_wxyz = quat_multiply_wxyz(
-            quat_multiply_wxyz(r_quat_wxyz, controller_quat_wxyz),
-            quat_inverse_wxyz(r_quat_wxyz),
+        return transform_xr_controller(
+            self.R_headset_world,
+            float(vr_pos[0]),
+            float(vr_pos[1]),
+            float(vr_pos[2]),
+            qx,
+            qy,
+            qz,
+            qw,
         )
-        return controller_xyz, controller_quat_wxyz
 
     def _clamp_orientation_to_range(
         self, q: np.ndarray, ref_q: np.ndarray, max_angle: float
@@ -422,22 +275,11 @@ class WebXRPiperPlacoTeleop:
         delta_xyz = arm.pos_filter.update(controller_xyz - arm.ref_controller_xyz, dt) * SCALE_FACTOR
 
         # 姿态：绝对控制（局部相对四元数法）
-        # q_rel 表示“从 grip 接合参考姿态到当前姿态”的相对旋转（手柄局部轴语义）
-        q_rel = quat_multiply_wxyz(quat_inverse_wxyz(arm.ref_controller_quat_wxyz), controller_quat_wxyz)
-        norm_rel = np.linalg.norm(q_rel)
-        if norm_rel > 1e-12:
-            q_rel = q_rel / norm_rel
-        else:
-            q_rel = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-
-        # rotation_scale 仍可用于姿态灵敏度调节（1.0 = 真实等比例跟随）
-        rel_aa = quaternion_to_angle_axis(q_rel)
-        rel_aa = rel_aa * self.rotation_scale
-        _, raw_q = apply_delta_pose(
-            np.zeros(3, dtype=float),
+        raw_q = target_rotation_from_controller_rel(
+            arm.ref_controller_quat_wxyz,
+            controller_quat_wxyz,
             arm.ref_ee_quat_wxyz,
-            np.zeros(3, dtype=float),
-            rel_aa,
+            self.rotation_scale,
         )
         # 保持四元数半球一致，再做 EMA 平滑
         prev_q = arm.rot_filter.value
@@ -450,17 +292,10 @@ class WebXRPiperPlacoTeleop:
         return delta_xyz, target_quat
 
     def _rotation_enabled(self, ctrl: dict) -> bool:
-        if self.rotation_mode == "off":
-            return False
-        if self.rotation_mode == "hold-a":
-            return self._is_button_pressed(ctrl, BTN_A_INDEX)
-        return True
+        return rotation_enabled(ctrl, self.rotation_mode, btn_a_index=BTN_A_INDEX)
 
     def _is_button_pressed(self, ctrl: dict, index: int) -> bool:
-        buttons = ctrl.get("buttons")
-        if not buttons or len(buttons) <= index:
-            return False
-        return bool(buttons[index].get("pressed", False))
+        return is_button_pressed(ctrl, index)
 
     def _is_b_button_pressed(self, ctrl: dict) -> bool:
         return self._is_button_pressed(ctrl, BTN_B_INDEX)
@@ -756,44 +591,30 @@ class WebXRPiperPlacoTeleop:
         sys.stdout.flush()
 
     async def ws_loop(self):
-        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
+        rot_hint = {
+            "always": "平移+旋转",
+            "hold-a": "平移(Grip) + 旋转(Grip+A)",
+            "off": "仅平移",
+        }.get(self.rotation_mode, "平移+旋转")
+        mode_tag = (
+            "双臂模式"
+            if len(self.active_hands) == 2
+            else f"单臂模式({self.active_hands[0]})"
+        )
+        connected = (
+            f"[Network] ✅ 已连接，{mode_tag}：按住 Grip 开始控制（{rot_hint}），按 B 回到初始位置"
+        )
 
-        print(f"\n[Network] 连接 WebXR 数据: {WS_URI}")
-        while True:
-            try:
-                async with websockets.connect(WS_URI, ssl=ssl_ctx) as ws:
-                    rot_hint = {
-                        "always": "平移+旋转",
-                        "hold-a": "平移(Grip) + 旋转(Grip+A)",
-                        "off": "仅平移",
-                    }.get(self.rotation_mode, "平移+旋转")
-                    mode_tag = (
-                        "双臂模式"
-                        if len(self.active_hands) == 2
-                        else f"单臂模式({self.active_hands[0]})"
-                    )
-                    print(f"[Network] ✅ 已连接，{mode_tag}：按住 Grip 开始控制（{rot_hint}），按 B 回到初始位置")
-                    control_task = asyncio.create_task(self.control_loop())
-                    try:
-                        while True:
-                            msg = await ws.recv()
-                            try:
-                                payload = json.loads(msg)
-                            except json.JSONDecodeError:
-                                continue
-                            self._latest_vr_data = payload
-                            self._track_vr_rate()
-                    finally:
-                        control_task.cancel()
-                        try:
-                            await control_task
-                        except asyncio.CancelledError:
-                            pass
-            except Exception as exc:
-                print(f"\n[Network] 连接中断: {exc}，2 秒后重连")
-                await asyncio.sleep(2.0)
+        def on_payload(payload: dict) -> None:
+            self._latest_vr_data = payload
+            self._track_vr_rate()
+
+        await run_webxr_ws_loop(
+            WS_URI,
+            on_payload,
+            control_coro_factory=self.control_loop,
+            connected_message=connected,
+        )
 
     def _track_vr_rate(self):
         """统计 WebXR 数据实际到达频率（每 3 秒打印一次），用于排查抖动是否源于上行数据率不足。"""

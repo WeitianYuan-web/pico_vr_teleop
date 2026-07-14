@@ -12,8 +12,8 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   echo "  cd ${PROJECT_DIR}"
   echo "  python3 -m venv .venv"
   echo "  source .venv/bin/activate"
-  echo "  pip install -r pyAgxArm/requirements-teleop.txt"
-  echo "  pip install -e pyAgxArm"
+  echo "  pip install -r third_party/pyAgxArm/requirements-teleop.txt"
+  echo "  pip install -e third_party/pyAgxArm"
   exit 1
 fi
 
@@ -85,6 +85,6 @@ if [[ "${DO_CAN_ACTIVATE}" -eq 1 && ${#CAN_PORTS[@]} -gt 0 ]]; then
   done
 fi
 
-cd "${ROOT_DIR}"
+cd "${PROJECT_DIR}"
 echo "[Launcher] 使用解释器: ${PYTHON_BIN}"
-exec "${PYTHON_BIN}" "${ROOT_DIR}/scripts/teleop_piper_webxr.py" "${ARGS[@]}"
+exec "${PYTHON_BIN}" "${PROJECT_DIR}/backends/piper/teleop/teleop_piper_webxr.py" "${ARGS[@]}"

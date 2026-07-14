@@ -9,7 +9,9 @@ import sys
 
 def _bootstrap() -> None:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    sdk_dir = os.path.join(project_root, "jaka_control", "sdk")
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    sdk_dir = os.path.join(project_root, "backends", "jaka", "sdk")
     if sdk_dir not in sys.path:
         sys.path.insert(0, sdk_dir)
 

@@ -9,7 +9,9 @@ import sys
 
 def _bootstrap() -> None:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    g1_dir = os.path.join(project_root, "g1_control")
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    g1_dir = os.path.join(project_root, "backends", "g1")
     if g1_dir not in sys.path:
         sys.path.insert(0, g1_dir)
 

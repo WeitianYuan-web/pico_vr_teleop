@@ -6,7 +6,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${PROJECT_DIR}/.venv"
 VENV_PYTHON="${VENV_DIR}/bin/python"
 VENV_ACTIVATE="${VENV_DIR}/bin/activate"
-WEBXR_DIR="${PROJECT_DIR}/webxr_test"
+WEBXR_DIR="${PROJECT_DIR}/webxr"
 LOG_DIR="${PROJECT_DIR}/logs"
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
 
@@ -281,11 +281,11 @@ fi
 
 if [[ "${DO_TELEOP}" -eq 1 ]]; then
   if [[ "${BACKEND}" == "jaka" ]]; then
-    TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/jaka_dual_webxr.py"
+    TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/jaka_dual_webxr.py"
   elif [[ "${BACKEND}" == "g1" ]]; then
-    TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/g1_dual_webxr.py"
+    TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/g1_dual_webxr.py"
   else
-    TELEOP_ENTRY="${PROJECT_DIR}/vr_teleop/piper_dual_webxr.py"
+    TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/piper_dual_webxr.py"
   fi
   echo "[Launcher] 遥操作后端: ${BACKEND}"
   echo "[Launcher] 启动遥操作（前台）: ${TELEOP_ENTRY} ${TELEOP_ARGS[*]:-}"
@@ -296,7 +296,7 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
     activate_runtime_env
     cd "${PROJECT_DIR}"
     if [[ "${BACKEND}" == "jaka" ]]; then
-      JAKA_SDK_DIR="${PROJECT_DIR}/jaka_control/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
+      JAKA_SDK_DIR="${PROJECT_DIR}/backends/jaka/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
       if [[ -d "${JAKA_SDK_DIR}" ]]; then
         export LD_LIBRARY_PATH="${JAKA_SDK_DIR}:${LD_LIBRARY_PATH:-}"
       else

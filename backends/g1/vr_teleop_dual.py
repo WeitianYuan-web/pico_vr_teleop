@@ -5,10 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import math
 import os
-import ssl
 import sys
 import time
 from dataclasses import dataclass, field
@@ -16,8 +13,18 @@ from typing import Literal
 
 import numpy as np
 import pinocchio as pin
-import websockets
 
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from common.clutch import controller_relative_delta, target_rotation_from_controller_rel
+from common.constants import BTN_A_INDEX, BTN_B_INDEX, HANDS
+from common.filters import lerp_position, slerp_filter_quat
+from common.math_quat import matrix_to_quat_wxyz
+from common.math_se3 import transform_xr_controller
+from common.vr_input import is_button_pressed, rotation_enabled
+from common.ws_client import run_webxr_ws_loop
 from config import (
     DEFAULT_CONTROL_HZ,
     DEFAULT_NETWORK_INTERFACE,
@@ -28,116 +35,7 @@ from config import (
 from g1_arm_controller import create_arm_controller
 from g1_arm_ik import G1DualArmIK
 
-HANDS = ("left", "right")
-BTN_A_INDEX = 4
-BTN_B_INDEX = 5
 Side = Literal["left", "right"]
-
-
-def matrix_to_quat_wxyz(rot: np.ndarray) -> np.ndarray:
-    m = rot
-    trace = np.trace(m)
-    if trace > 0.0:
-        s = np.sqrt(trace + 1.0) * 2.0
-        w = 0.25 * s
-        x = (m[2, 1] - m[1, 2]) / s
-        y = (m[0, 2] - m[2, 0]) / s
-        z = (m[1, 0] - m[0, 1]) / s
-    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
-        s = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
-        w = (m[2, 1] - m[1, 2]) / s
-        x = 0.25 * s
-        y = (m[0, 1] + m[1, 0]) / s
-        z = (m[0, 2] + m[2, 0]) / s
-    elif m[1, 1] > m[2, 2]:
-        s = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
-        w = (m[0, 2] - m[2, 0]) / s
-        x = (m[0, 1] + m[1, 0]) / s
-        y = 0.25 * s
-        z = (m[1, 2] + m[2, 1]) / s
-    else:
-        s = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
-        w = (m[1, 0] - m[0, 1]) / s
-        x = (m[0, 2] + m[2, 0]) / s
-        y = (m[1, 2] + m[2, 1]) / s
-        z = 0.25 * s
-    q = np.array([w, x, y, z], dtype=float)
-    if q[0] < 0.0:
-        q = -q
-    n = np.linalg.norm(q)
-    if n < 1e-12:
-        return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-    return q / n
-
-
-def quat_multiply_wxyz(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    return np.array(
-        [
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-        ],
-        dtype=float,
-    )
-
-
-def quat_inverse_wxyz(q: np.ndarray) -> np.ndarray:
-    w, x, y, z = q
-    return np.array([w, -x, -y, -z], dtype=float)
-
-
-def quaternion_to_angle_axis(quat: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    q = np.array(quat, dtype=float, copy=True)
-    if q[0] < 0.0:
-        q = -q
-    angle = 2.0 * np.arccos(np.clip(q[0], -1.0, 1.0))
-    if angle < eps:
-        return np.zeros(3, dtype=float)
-    sin_half = np.sin(angle / 2.0)
-    if sin_half < eps:
-        return np.zeros(3, dtype=float)
-    return (q[1:] / sin_half) * angle
-
-
-def apply_delta_pose(source_rot_wxyz: np.ndarray, delta_rot: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    angle = float(np.linalg.norm(delta_rot))
-    if angle > eps:
-        axis = delta_rot / angle
-        half = angle * 0.5
-        rot_delta = np.array([np.cos(half), *(axis * np.sin(half))], dtype=float)
-    else:
-        rot_delta = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-    target = quat_multiply_wxyz(rot_delta, source_rot_wxyz)
-    n = np.linalg.norm(target)
-    if n < 1e-12:
-        return source_rot_wxyz.copy()
-    if target[0] < 0.0:
-        target = -target
-    return target / n
-
-
-def slerp_quat_wxyz(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
-    a = np.array(q0, dtype=float, copy=True)
-    b = np.array(q1, dtype=float, copy=True)
-    dot = float(np.dot(a, b))
-    if dot < 0.0:
-        b = -b
-        dot = -dot
-    if dot > 0.9995:
-        out = a + t * (b - a)
-        n = np.linalg.norm(out)
-        return out / n if n > 1e-12 else a
-    theta_0 = math.acos(np.clip(dot, -1.0, 1.0))
-    sin_0 = math.sin(theta_0)
-    theta = theta_0 * t
-    s0 = math.sin(theta_0 - theta) / sin_0
-    s1 = math.sin(theta) / sin_0
-    out = s0 * a + s1 * b
-    n = np.linalg.norm(out)
-    return out / n if n > 1e-12 else a
 
 
 def se3_from_pos_quat(pos_m: np.ndarray, quat_wxyz: np.ndarray) -> pin.SE3:
@@ -192,7 +90,7 @@ class DualG1VrTeleop:
         self.active_hands = HANDS if self.args.hands == "both" else (self.args.hands,)
         self._state_publish_interval = 1.0 / max(1.0, float(self.args.state_publish_hz))
         if self.args.publish_state:
-            publisher_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../publisher"))
+            publisher_dir = os.path.join(_PROJECT_ROOT, "publisher")
             if publisher_dir not in sys.path:
                 sys.path.insert(0, publisher_dir)
             from teleop_state_bridge import TeleopStateSender  # noqa: WPS433
@@ -204,30 +102,15 @@ class DualG1VrTeleop:
             )
 
     def _is_button_pressed(self, ctrl: dict, index: int) -> bool:
-        buttons = ctrl.get("buttons")
-        if not buttons or len(buttons) <= index:
-            return False
-        return bool(buttons[index].get("pressed", False))
+        return is_button_pressed(ctrl, index)
 
     def _rotation_enabled(self, ctrl: dict) -> bool:
-        if self.args.rotation_mode == "off":
-            return False
-        if self.args.rotation_mode == "hold-a":
-            return self._is_button_pressed(ctrl, BTN_A_INDEX)
-        return True
+        return rotation_enabled(ctrl, self.args.rotation_mode, btn_a_index=BTN_A_INDEX)
 
     def _transform_xr_controller(
         self, x: float, y: float, z: float, qx: float, qy: float, qz: float, qw: float
     ) -> tuple[np.ndarray, np.ndarray]:
-        vr_pos = np.array([x, y, z], dtype=float)
-        controller_xyz = R_HEADSET_TO_WORLD @ vr_pos
-        controller_quat_wxyz = np.array([qw, qx, qy, qz], dtype=float)
-        r_quat_wxyz = matrix_to_quat_wxyz(R_HEADSET_TO_WORLD)
-        controller_quat_wxyz = quat_multiply_wxyz(
-            quat_multiply_wxyz(r_quat_wxyz, controller_quat_wxyz),
-            quat_inverse_wxyz(r_quat_wxyz),
-        )
-        return controller_xyz, controller_quat_wxyz
+        return transform_xr_controller(R_HEADSET_TO_WORLD, x, y, z, qx, qy, qz, qw)
 
     def connect(self) -> None:
         self.arm_ik = G1DualArmIK(urdf_path=self.args.urdf)
@@ -361,27 +244,22 @@ class DualG1VrTeleop:
             return
 
         assert side.ref_ee_pose is not None and side.ref_ee_quat_wxyz is not None
-        delta_m = (c_xyz - side.ref_controller_xyz) * self.args.position_scale
+        delta_m = controller_relative_delta(
+            side.ref_controller_xyz, c_xyz, self.args.position_scale
+        )
         raw_pos = side.ref_ee_pose.translation + delta_m
-        alpha_pos = float(np.clip(self.args.pos_filter_alpha, 0.0, 1.0))
-        if side.filt_pos_m is None or alpha_pos >= 0.999:
-            side.filt_pos_m = raw_pos
-        else:
-            side.filt_pos_m = (1.0 - alpha_pos) * side.filt_pos_m + alpha_pos * raw_pos
+        side.filt_pos_m = lerp_position(side.filt_pos_m, raw_pos, self.args.pos_filter_alpha)
 
         if self._rotation_enabled(ctrl):
-            q_rel = quat_multiply_wxyz(quat_inverse_wxyz(side.ref_controller_quat_wxyz), c_quat)
-            n_rel = np.linalg.norm(q_rel)
-            q_rel = q_rel / n_rel if n_rel > 1e-12 else np.array([1.0, 0.0, 0.0, 0.0])
-            rel_aa = quaternion_to_angle_axis(q_rel) * self.args.rotation_scale
-            raw_q = apply_delta_pose(side.ref_ee_quat_wxyz, rel_aa)
-            alpha_rot = float(np.clip(self.args.rot_filter_alpha, 0.0, 1.0))
-            if side.filt_quat_wxyz is None or alpha_rot >= 0.999:
-                side.filt_quat_wxyz = raw_q
-            else:
-                if np.dot(side.filt_quat_wxyz, raw_q) < 0.0:
-                    raw_q = -raw_q
-                side.filt_quat_wxyz = slerp_quat_wxyz(side.filt_quat_wxyz, raw_q, alpha_rot)
+            raw_q = target_rotation_from_controller_rel(
+                side.ref_controller_quat_wxyz,
+                c_quat,
+                side.ref_ee_quat_wxyz,
+                self.args.rotation_scale,
+            )
+            side.filt_quat_wxyz = slerp_filter_quat(
+                side.filt_quat_wxyz, raw_q, self.args.rot_filter_alpha
+            )
             side.desired_pose = se3_from_pos_quat(side.filt_pos_m, side.filt_quat_wxyz)
         else:
             side.desired_pose = se3_from_pos_quat(side.filt_pos_m, side.ref_ee_quat_wxyz)
@@ -516,32 +394,12 @@ class DualG1VrTeleop:
             await asyncio.sleep(max(0.0, period - elapsed))
 
     async def ws_loop(self) -> None:
-        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-        print(f"[Network] 连接 WebXR: {self.args.ws_uri}")
-        while True:
-            try:
-                async with websockets.connect(self.args.ws_uri, ssl=ssl_ctx) as ws:
-                    print("[Network] WebXR 已连接，按住 Grip 控制，B 键回零位")
-                    control_task = asyncio.create_task(self.control_loop())
-                    try:
-                        while True:
-                            msg = await ws.recv()
-                            try:
-                                payload = json.loads(msg)
-                            except json.JSONDecodeError:
-                                continue
-                            self._latest_vr_data = payload
-                    finally:
-                        control_task.cancel()
-                        try:
-                            await control_task
-                        except asyncio.CancelledError:
-                            pass
-            except Exception as exc:
-                print(f"[Network] 连接中断: {exc}，2 秒后重连")
-                await asyncio.sleep(2.0)
+        await run_webxr_ws_loop(
+            self.args.ws_uri,
+            lambda payload: setattr(self, "_latest_vr_data", payload),
+            control_coro_factory=self.control_loop,
+            connected_message="[Network] WebXR 已连接，按住 Grip 控制，B 键回零位",
+        )
 
     def run(self) -> None:
         self.connect()

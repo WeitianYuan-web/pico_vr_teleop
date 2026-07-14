@@ -9,9 +9,11 @@ import sys
 
 def _bootstrap() -> None:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    control_dir = os.path.join(project_root, "control")
-    if control_dir not in sys.path:
-        sys.path.insert(0, control_dir)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    teleop_dir = os.path.join(project_root, "backends", "piper", "teleop")
+    if teleop_dir not in sys.path:
+        sys.path.insert(0, teleop_dir)
 
 
 def main() -> int:

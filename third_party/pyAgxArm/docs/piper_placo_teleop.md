@@ -20,7 +20,7 @@
 ### 1.2 入口脚本
 
 - 键盘遥操作：`run_piper_keyboard_teleop.py`
-- WebXR 遥操作：`../webxr_test/scripts/teleop_piper_webxr.py`
+- WebXR 遥操作：`../backends/piper/teleop/teleop_piper_webxr.py`
 - 启动脚本：`run_piper.sh`
 
 ---

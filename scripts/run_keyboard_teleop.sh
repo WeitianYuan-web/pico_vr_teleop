@@ -3,9 +3,9 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
-CAN_ACTIVATE="${PROJECT_DIR}/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh"
+CAN_ACTIVATE="${PROJECT_DIR}/third_party/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh"
 if [[ ! -x "${CAN_ACTIVATE}" ]]; then
-  CAN_ACTIVATE="${PROJECT_DIR}/pyAgxArm/pyAgxArm/scripts/linux/can_activate.sh"
+  CAN_ACTIVATE="${PROJECT_DIR}/third_party/pyAgxArm/pyAgxArm/scripts/linux/can_activate.sh"
 fi
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
 
@@ -56,4 +56,4 @@ if [[ "${DO_CAN_ACTIVATE}" -eq 1 ]]; then
 fi
 
 echo "[Launcher] 使用解释器: ${PYTHON_BIN}"
-exec "${PYTHON_BIN}" "${PROJECT_DIR}/pyAgxArm/run_piper_keyboard_teleop.py" "${ARGS[@]}"
+exec "${PYTHON_BIN}" "${PROJECT_DIR}/third_party/pyAgxArm/run_piper_keyboard_teleop.py" "${ARGS[@]}"

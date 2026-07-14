@@ -3,26 +3,21 @@
 from __future__ import annotations
 
 import os
+import sys
 
-import numpy as np
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_PKG_DIR, "../.."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from common.constants import DEFAULT_WS_URI
+from common.coord_frames import HEADSET_TO_WORLD_X_FORWARD
 
 # /**
 #  * @brief WebXR (Y-up, -Z 前) -> G1 躯干系 (Z-up, +X 前, +Y 左)
-#  *
-#  *   手柄前 (-Z) -> 躯干 +X
-#  *   手柄右 (+X) -> 躯干 -Y
-#  *   手柄上 (+Y) -> 躯干 +Z
 #  */
-R_HEADSET_TO_WORLD = np.array(
-    [
-        [0.0, 0.0, -1.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-    ],
-    dtype=float,
-)
+R_HEADSET_TO_WORLD = HEADSET_TO_WORLD_X_FORWARD
 
-_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_URDF_PATH = os.path.join(_PKG_DIR, "assets", "g1_dual_arm.urdf")
 
 LEFT_EE_FRAME = "left_rubber_hand"
@@ -47,6 +42,5 @@ ARM_JOINT_NAMES = (
 
 # 本机有线口（G1 网段 192.168.123.x）；可用 ip -br addr 确认
 DEFAULT_NETWORK_INTERFACE: str | None = "enp12s0"
-DEFAULT_WS_URI = "wss://localhost:8081"
 DEFAULT_CONTROL_HZ = 100.0
 DEFAULT_ARM_VELOCITY_LIMIT = 20.0

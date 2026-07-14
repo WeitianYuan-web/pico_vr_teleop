@@ -13,7 +13,7 @@ ROS2 发布者节点，发布以下话题：
 - `/puppet/hand_right` (`sensor_msgs/JointState`)
 
 其中 3 路相机话题发布 RealSense 实时彩色图像，每路相机使用独立采集线程发布；`/puppet/*` 话题默认监听本机 UDP `17981`，
-接收 `control` 或 `webxr_test` 遥操作脚本上报的臂/手状态后发布真实数据。
+接收 `backends` 或 `webxr` 遥操作脚本上报的臂/手状态后发布真实数据。
 若超过 `state_stale_timeout_s` 未收到新数据，则发布零位占位。
 
 ## 依赖

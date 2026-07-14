@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import pinocchio as pin
 
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from common.filters import WeightedMovingFilter
 from config import ARM_JOINT_NAMES, DEFAULT_URDF_PATH, LEFT_EE_FRAME, RIGHT_EE_FRAME
-from weighted_moving_filter import WeightedMovingFilter
 
 try:
     import placo
@@ -55,13 +60,18 @@ def _strip_mesh_blocks(urdf_text: str) -> str:
 
 
 def _prepare_urdf_for_placo(urdf_path: str) -> str:
+    """
+    /**
+     * @brief 生成无 mesh 的临时 URDF，写入系统临时目录（不污染 assets/）
+     */
+    """
     src = Path(urdf_path).resolve()
     text = _strip_mesh_blocks(src.read_text(encoding="utf-8"))
     tmp = tempfile.NamedTemporaryFile(
         prefix="g1_placo_",
         suffix=".urdf",
         delete=False,
-        dir=str(src.parent),
+        dir=tempfile.gettempdir(),
     )
     tmp_path = Path(tmp.name)
     tmp.close()

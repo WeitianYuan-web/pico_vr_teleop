@@ -17,4 +17,4 @@ fi
 
 echo "[Launcher] 使用解释器: ${PYTHON_BIN}"
 echo "[Launcher] G1 双臂 VR 遥操作（Grip 接合，B 回零）"
-exec "${PYTHON_BIN}" "${PROJECT_DIR}/vr_teleop/g1_dual_webxr.py" "$@"
+exec "${PYTHON_BIN}" "${PROJECT_DIR}/entrypoints/g1_dual_webxr.py" "$@"
