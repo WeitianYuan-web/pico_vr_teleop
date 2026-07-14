@@ -169,6 +169,7 @@ class SideState:
     ref_controller_quat_wxyz: np.ndarray | None = None
     filt_pos_m: np.ndarray | None = None
     filt_quat_wxyz: np.ndarray | None = None
+    hold_q: np.ndarray | None = None  # Grip 松开后冻结的 7 维关节
     last_home_time: float = 0.0
     prev_b_pressed: bool = False
 
@@ -237,8 +238,8 @@ class DualG1VrTeleop:
             network_interface=self.args.network_interface,
             arm_velocity_limit=self.args.arm_velocity_limit,
         )
-        if not self.args.no_home and not self.args.dry_run:
-            self.arm_ctrl.ctrl_dual_arm_go_home()
+        if not self.args.no_home:
+            self._move_to_preferred_posture()
         self.cmd_q = self.arm_ctrl.get_current_dual_arm_q()
         left_pose, right_pose = self.arm_ik.forward_kinematics(self.cmd_q)
         pose_map = {"left": left_pose, "right": right_pose}
@@ -250,6 +251,24 @@ class DualG1VrTeleop:
             )
             p = pose_map[side].translation
             print(f"[{self.sides[side].name}] 初始末端 xyz=({p[0]:.3f},{p[1]:.3f},{p[2]:.3f}) m")
+
+    def _move_to_preferred_posture(self, duration_s: float = 2.5) -> None:
+        """
+        /**
+         * @brief 插值到肘部外展偏好姿态（非全零）
+         */
+        """
+        assert self.arm_ctrl is not None and self.arm_ik is not None
+        q0 = self.arm_ctrl.get_current_dual_arm_q()
+        q1 = self.arm_ik.preferred_q()
+        print("[G1] 移动到肘部外展偏好姿态 ...")
+        steps = max(1, int(duration_s / 0.02))
+        for i in range(steps + 1):
+            a = i / steps
+            q = (1.0 - a) * q0 + a * q1
+            self.arm_ctrl.ctrl_dual_arm(q, np.zeros(14))
+            time.sleep(0.02)
+        self.cmd_q = self.arm_ctrl.get_current_dual_arm_q()
 
     def disconnect(self) -> None:
         if self.arm_ctrl is not None:
@@ -271,18 +290,26 @@ class DualG1VrTeleop:
         now = time.time()
         if now - side.last_home_time < self.args.home_cooldown_s:
             return
-        side.last_home_time = now
-        print(f"\n[{side.name}] B 键回初始关节")
-        self.arm_ctrl.ctrl_dual_arm_go_home()
-        self.cmd_q = self.arm_ctrl.get_current_dual_arm_q()
+        # 任意一侧 B 键：双臂回肘部外展偏好姿态
+        for s in self.sides.values():
+            s.last_home_time = now
+        print(f"\n[{side.name}] B 键回肘部外展偏好姿态")
+        self._move_to_preferred_posture()
         left_pose, right_pose = self.arm_ik.forward_kinematics(self.cmd_q)
         for s in self.sides.values():
             s.desired_pose = (left_pose if s.side == "left" else right_pose).copy()
+            s.hold_q = None
             self._release_clutch(s)
 
     def _release_clutch(self, side: SideState) -> None:
         if side.is_clutching:
-            print(f"\n[{side.name}] Grip 断开")
+            # 松开瞬间冻结该侧 7 关节，避免另一侧仍在 IK 时被偏好姿态慢慢拉走
+            q = self.cmd_q
+            if q is None or np.linalg.norm(q) < 1e-12:
+                assert self.arm_ctrl is not None
+                q = self.arm_ctrl.get_current_dual_arm_q()
+            side.hold_q = (q[0:7].copy() if side.side == "left" else q[7:14].copy())
+            print(f"\n[{side.name}] Grip 断开（关节已冻结保持）")
         side.is_clutching = False
         side.ref_ee_pose = None
         side.ref_ee_quat_wxyz = None
@@ -312,6 +339,7 @@ class DualG1VrTeleop:
             side.desired_pose = ee.copy()
             side.ref_ee_quat_wxyz = quat_wxyz_from_se3(ee)
             side.is_clutching = True
+            side.hold_q = None
             side.ref_controller_xyz = None
             side.ref_controller_quat_wxyz = None
             side.filt_pos_m = None
@@ -374,22 +402,56 @@ class DualG1VrTeleop:
         assert self.arm_ctrl is not None and self.arm_ik is not None
         any_clutch = any(s.is_clutching for s in self.sides.values())
         if not any_clutch:
+            # 双侧都松开：继续下发上次 cmd_q，保持冻结姿态（避免运控慢慢拉回）
+            if np.any(np.abs(self.cmd_q) > 1e-9):
+                self.arm_ctrl.ctrl_dual_arm(self.cmd_q, np.zeros(14))
             return
 
-        # 未接合侧保持当前 FK 位姿，避免 IK 把空闲臂拽走
-        left_pose, right_pose = self.arm_ik.forward_kinematics(self.arm_ctrl.get_current_dual_arm_q())
-        target_left = left_pose
-        target_right = right_pose
+        # 未接合侧：用冻结关节对应的 FK 作为 IK 目标；接合侧用 desired
+        q_hold = self.cmd_q.copy()
         left_side = self.sides.get("left")
         right_side = self.sides.get("right")
+        if left_side is not None and not left_side.is_clutching and left_side.hold_q is not None:
+            q_hold[0:7] = left_side.hold_q
+        if right_side is not None and not right_side.is_clutching and right_side.hold_q is not None:
+            q_hold[7:14] = right_side.hold_q
+
+        left_pose, right_pose = self.arm_ik.forward_kinematics(q_hold)
+        target_left = left_pose
+        target_right = right_pose
         if left_side is not None and left_side.is_clutching and left_side.desired_pose is not None:
             target_left = left_side.desired_pose
         if right_side is not None and right_side.is_clutching and right_side.desired_pose is not None:
             target_right = right_side.desired_pose
 
         q_now = self.arm_ctrl.get_current_dual_arm_q()
+        # 未接合侧用冻结关节作 IK 初值，减少求解器改动该侧
+        if left_side is not None and not left_side.is_clutching and left_side.hold_q is not None:
+            q_now[0:7] = left_side.hold_q
+        if right_side is not None and not right_side.is_clutching and right_side.hold_q is not None:
+            q_now[7:14] = right_side.hold_q
+
         dq_now = self.arm_ctrl.get_current_dual_arm_dq()
-        sol_q, sol_tau = self.arm_ik.solve_ik(target_left, target_right, q_now, dq_now)
+        # 未接合侧在 QP 内 mask DoF，切断双臂耦合（比事后写回更稳）
+        lock_left = left_side is None or not left_side.is_clutching
+        lock_right = right_side is None or not right_side.is_clutching
+        sol_q, sol_tau = self.arm_ik.solve_ik(
+            target_left,
+            target_right,
+            q_now,
+            dq_now,
+            lock_left=lock_left,
+            lock_right=lock_right,
+        )
+
+        # 再保险：写回 hold_q，并对锁侧清零前馈
+        if left_side is not None and not left_side.is_clutching and left_side.hold_q is not None:
+            sol_q[0:7] = left_side.hold_q
+            sol_tau[0:7] = 0.0
+        if right_side is not None and not right_side.is_clutching and right_side.hold_q is not None:
+            sol_q[7:14] = right_side.hold_q
+            sol_tau[7:14] = 0.0
+
         self.cmd_q = sol_q
         self.arm_ctrl.ctrl_dual_arm(sol_q, sol_tau)
 

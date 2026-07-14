@@ -3,3 +3,4 @@
 .pytest_cache
 __pycache__/
 logs
+g1_control/assets/g1_placo_*.urdf

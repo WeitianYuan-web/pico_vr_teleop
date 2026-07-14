@@ -9,9 +9,21 @@ PICO WebXR → webxr_test/server.py (WSS)
            → vr_teleop/g1_dual_webxr.py
            → g1_control/vr_teleop_dual.py
                 ├─ Grip clutch 增量位姿映射
-                ├─ Pinocchio CLIK（g1_dual_arm.urdf，14 DoF）
+                ├─ Placo QP IK（末端位姿 + 肘部外展正则 + 关节限位）
                 └─ DDS 关节 PD（rt/arm_sdk 或 rt/lowcmd）
 ```
+
+IK 说明：
+
+| 项 | 内容 |
+|----|------|
+| 求解器 | `placo.KinematicsSolver`（与 Piper 后端同类） |
+| 末端任务 | 左右 `rubber_hand` 位姿 / 位置软约束 |
+| 肘部 | joints 正则偏向外展姿态 + 肘 link ±Y 外侧软约束 |
+| 限位 | `enable_joint_limits` + `enable_velocity_limits` + 边界内缩，减轻贴边抖动 |
+| 单臂 | 松开侧 `mask_dof` + 关闭软任务；滤波钉死 `hold_q`，避免双臂耦合抖动 |
+
+偏好姿态见 `g1_arm_ik.PREFERRED_JOINTS`：双手略抬置于身体前方（`shoulder_pitch≈-0.5`），肘部外展（左 `roll>0`、右 `roll<0`，肘约 0.8 rad）。
 
 ## 依赖安装
 
@@ -82,7 +94,7 @@ cd webxr_test && ../.venv/bin/python server.py
 | 文件 | 说明 |
 |------|------|
 | `g1_arm_controller.py` | DDS 双臂 PD / Mock |
-| `g1_arm_ik.py` | Pinocchio 双臂 CLIK |
+| `g1_arm_ik.py` | **Placo QP** 双臂 IK（肘部外展正则） |
 | `vr_teleop_dual.py` | WebXR clutch 主循环 |
 | `assets/g1_dual_arm.urdf` | 14 DoF 双臂模型 |
 

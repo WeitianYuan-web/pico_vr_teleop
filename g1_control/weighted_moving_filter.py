@@ -41,3 +41,14 @@ class WeightedMovingFilter:
     @property
     def filtered_data(self) -> np.ndarray:
         return self._filtered_data
+
+    def pin_indices(self, indices: slice | np.ndarray | list[int], values: np.ndarray) -> None:
+        """
+        /**
+         * @brief 将指定维度钉死为给定值，并同步滑动窗口（避免锁臂残差渗入滤波）
+         */
+        """
+        values = np.asarray(values, dtype=float).reshape(-1)
+        self._filtered_data[indices] = values
+        for item in self._data_queue:
+            item[indices] = values
