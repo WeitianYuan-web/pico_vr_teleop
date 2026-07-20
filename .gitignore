@@ -2,7 +2,19 @@
 .venv
 .pytest_cache
 __pycache__/
+*.pyc
 logs
-# Placo 临时 URDF（现写入 /tmp；保留忽略以防旧路径残留）
+.env
+
+# Placo 临时 URDF（写入 /tmp；保留忽略以防旧路径残留）
 **/g1_placo_*.urdf
 backends/g1/assets/g1_placo_*.urdf
+
+# JAKA：厂商闭源 SDK 与文档不入库（换机需单独拷贝到同路径）
+backends/jaka/20260104145805A007/
+backends/jaka/pdf-docs-jaka-md/
+backends/jaka/sdk/.venv/
+
+# Inspire：源码体积大，默认不强制入库；编译产物永不入库
+third_party/InspireHandSDK_Y/build/
+third_party/InspireHandSDK_Y/.cache/

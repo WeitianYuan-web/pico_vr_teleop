@@ -1,0 +1,9 @@
+[project]
+name = "jaka-sdk-teleop"
+version = "0.1.0"
+description = "JAKA robot SDK keyboard teleop"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+package = false

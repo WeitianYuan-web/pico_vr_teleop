@@ -27,11 +27,12 @@ cd pico_vr_teleop
 source .venv/bin/activate
 ```
 
-可选：
+`setup_env.sh` 只覆盖 **Piper + publisher**。JAKA 厂商包、Inspire、Unitree 需按后端另装，见 **[DEPENDENCIES.md](DEPENDENCIES.md)**。
 
-- Piper 灵巧手：编译 `third_party/InspireHandSDK_Y` 的 Python 绑定（见该目录说明）
-- G1：安装 `unitree_sdk2_python` + CycloneDDS（见 [backends/g1/README.md](backends/g1/README.md)）
-- WebXR 证书：需 `webxr/cert.pem`、`webxr/key.pem`
+- Piper 灵巧手：拷贝并编译 `third_party/InspireHandSDK_Y`
+- JAKA：拷贝 `backends/jaka/20260104145805A007/`
+- G1：安装 `unitree_sdk2_python` + CycloneDDS
+- WebXR：需 `webxr/cert.pem`、`key.pem`
 
 ## 一键启动（推荐）
 
@@ -68,6 +69,7 @@ source .venv/bin/activate
 
 ## 更多文档
 
+- [DEPENDENCIES.md](DEPENDENCIES.md) — 跨设备 SDK / 依赖清单
 - [webxr/WEBXR_PIPER_TELEOP.md](webxr/WEBXR_PIPER_TELEOP.md) — Piper VR 参数与坐标系
 - [common/README.md](common/README.md) — 三后端共用模块
-- [third_party/README.md](third_party/README.md) — 厂商 SDK 安装
+- [third_party/README.md](third_party/README.md) — Piper / Inspire 安装
