@@ -2,9 +2,10 @@
 
 ROS2 发布者节点，发布以下话题：
 
-- `/camera_f/color/image_raw` (`sensor_msgs/Image`, `rgb8`)
-- `/camera_l/color/image_raw` (`sensor_msgs/Image`, `rgb8`)
-- `/camera_r/color/image_raw` (`sensor_msgs/Image`, `rgb8`)
+- `/camera_f/color/image_raw` (`sensor_msgs/Image`, `rgb8`) **默认**
+- `/camera_l/color/image_raw` (`sensor_msgs/Image`, `rgb8`) **默认**
+- `/camera_r/color/image_raw` (`sensor_msgs/Image`, `rgb8`) **默认**
+- `/camera_*/color/image_raw/compressed` (`sensor_msgs/CompressedImage`, jpeg) 可选
 - `/puppet/joint_left` (`sensor_msgs/JointState`)
 - `/puppet/joint_right` (`sensor_msgs/JointState`)
 - `/puppet/end_pose_left` (`geometry_msgs/PoseStamped`)
@@ -20,6 +21,7 @@ ROS2 发布者节点，发布以下话题：
 
 - ROS2 Python 环境（`rclpy`, `sensor_msgs`, `geometry_msgs`）
 - `pyrealsense2`
+- `numpy`；若开启 compressed 还需 `opencv-python`
 
 ## 运行
 
@@ -27,6 +29,7 @@ ROS2 发布者节点，发布以下话题：
 cd /home/b0106/pico_test/pico_vr_teleop
 source /opt/ros/jazzy/setup.bash
 source .venv/bin/activate
+
 python3 publisher/teleop_realsense_publisher.py
 ```
 
@@ -37,7 +40,10 @@ python3 publisher/teleop_realsense_publisher.py --ros-args \
   -p camera_width:=640 \
   -p camera_height:=480 \
   -p camera_fps:=30 \
-  -p placeholder_hz:=120.0 \
+  -p placeholder_hz:=30.0 \
+  -p publish_raw_image:=true \
+  -p publish_compressed_image:=false \
+  -p jpeg_quality:=80 \
   -p state_udp_host:=127.0.0.1 \
   -p state_udp_port:=17981 \
   -p state_stale_timeout_s:=1.0 \
@@ -47,7 +53,40 @@ python3 publisher/teleop_realsense_publisher.py --ros-args \
 ```
 
 若不手动指定序列号，节点会自动按设备序列号排序后依次分配到 `f/l/r`。
-节点会每 5 秒打印一次各相机内部发布帧率；若 `ros2 topic hz` 明显低于节点日志，优先检查订阅端 QoS、DDS 或网络负载。
+
+### 帧率相关（三路 640×480 目标约 30Hz）
+
+| 参数 / 行为 | 说明 |
+|---|---|
+| `camera_fps` | 驱动目标帧率，默认 30 |
+| `publish_raw_image` | 默认 **true**，话题不变，无损 `rgb8` |
+| `publish_compressed_image` | 默认 **false**；可选 JPEG 小包备份话题 |
+| `placeholder_hz` | `/puppet/*` 状态定时器频率，默认 **30** |
+| 采集侧 | `frames_queue_size=1`、`poll_for_frames` 取最新、AE 优先帧率 |
+| 执行器 | `MultiThreadedExecutor(num_threads=4)` |
+| 本机传输 | Fast DDS 保留内置发现 + 加大 SHM（默认 SHM≈512KB < 单帧≈900KB） |
+
+**为何订阅端会只有十几 Hz？**  
+发布端内部一直是 ~30Hz。640×480 `rgb8` 单帧约 900KB，默认 Fast DDS SHM segment 只有约 512KB，大图会被迫走 UDP 分片并丢帧。`fastdds_local_image.xml` 加大 SHM，并保留内置传输，因此普通 `ros2 topic list` 仍能发现话题；话题名、消息类型、QoS 和图像参数均不改变。
+
+测订阅端真实 FPS（QoS 匹配）：
+
+```bash
+python3 publisher/topic_hz_best_effort.py /camera_f/color/image_raw
+```
+
+发布端内部统计：
+
+```bash
+tail -f logs/publisher.log | grep 发布帧率
+```
+
+可选开启 JPEG（有损、另开话题，不替换 raw）：
+
+```bash
+python3 publisher/teleop_realsense_publisher.py --ros-args \
+  -p publish_compressed_image:=true
+```
 
 ## 与遥操作联动
 

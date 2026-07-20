@@ -123,6 +123,12 @@ activate_runtime_env() {
   set -u
   # shellcheck disable=SC1091
   source "${VENV_ACTIVATE}"
+  # 大图本机传输：加大 SHM，同时保留内置传输以便 ros2 CLI 能发现话题
+  local fastdds_xml="${PROJECT_DIR}/publisher/fastdds_local_image.xml"
+  if [[ -f "${fastdds_xml}" ]]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${fastdds_xml}"
+    export FASTDDS_DEFAULT_PROFILES_FILE="${fastdds_xml}"
+  fi
 }
 
 mkdir -p "${LOG_DIR}"

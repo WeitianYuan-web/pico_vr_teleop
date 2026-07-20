@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ROS2 topic names / types / QoS unchanged.
+
+  Keep builtin transports so plain `ros2 topic list` can discover nodes.
+  Add a large SHM segment: default SHM is only ~512KB, while one 640x480
+  rgb8 Image is ~900KB, which forces UDP fragmentation and frame loss.
+-->
+<dds>
+  <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>image_shm</transport_id>
+        <type>SHM</type>
+        <segment_size>16777216</segment_size>
+        <port_queue_capacity>1024</port_queue_capacity>
+      </transport_descriptor>
+    </transport_descriptors>
+
+    <participant profile_name="local_image_participant" is_default_profile="true">
+      <rtps>
+        <useBuiltinTransports>true</useBuiltinTransports>
+        <userTransports>
+          <transport_id>image_shm</transport_id>
+        </userTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>
