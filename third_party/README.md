@@ -35,3 +35,16 @@ cmake --build build --target inspire_hand_py
 |------|------|----------|
 | JAKA | `backends/jaka/20260104145805A007/` 厂商包 | 否，见 [backends/jaka/README.md](../backends/jaka/README.md) |
 | G1 | `unitree_sdk2_python` + CycloneDDS 0.10.x | 否，见 [backends/g1/README.md](../backends/g1/README.md) |
+| IO Gesture | `third_party/io_exotrans2hand/`（含 bundle） | 否，见下 |
+
+## IO Gesture（外骨骼 → 手指重定向）
+
+整包放到 `third_party/io_exotrans2hand/`（与 JAKA 厂商包类似，本机同步、大二进制不入库）：
+
+```bash
+./scripts/sync_io_exotrans2hand.sh
+# 或：IO_EXOTRANS2HAND_SRC=/path/to/io_exotrans2hand_project_* ./scripts/sync_io_exotrans2hand.sh
+```
+
+`bundle/` 已在 `.gitignore`。联调入口见 [controllers/io_hand/README.md](../controllers/io_hand/README.md)。
+

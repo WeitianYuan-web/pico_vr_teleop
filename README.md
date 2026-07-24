@@ -67,6 +67,8 @@ source .venv/bin/activate
 
 遥操作经 UDP `127.0.0.1:17981` 上报，由 `publisher/` 发布 `/puppet/*` 与可选 RealSense 图像。详见 [publisher/README.md](publisher/README.md)。
 
+VR 臂 + IO 外骨骼控手（RH56F2）：见 [controllers/io_hand/README.md](controllers/io_hand/README.md)。
+
 ## 更多文档
 
 - [DEPENDENCIES.md](DEPENDENCIES.md) — 跨设备 SDK / 依赖清单

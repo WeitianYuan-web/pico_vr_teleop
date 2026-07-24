@@ -1,0 +1,16 @@
+// io_gateway / exo / controller 共用；改后需重启 gateway 及所有子进程
+// 本机隔离：组播 scouting 仅绑定 loopback（lo），本机多进程可互相发现，
+// 不会扩散到局域网其他机器。
+{
+  mode: "peer",
+  scouting: {
+    multicast: {
+      enabled: true,
+      interface: "lo",
+    },
+    gossip: { enabled: false },
+  },
+  listen: {
+    endpoints: ["tcp/127.0.0.1:0"],
+  },
+}

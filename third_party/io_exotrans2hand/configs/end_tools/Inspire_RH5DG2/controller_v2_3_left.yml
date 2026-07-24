@@ -1,0 +1,95 @@
+enable: True                                    #是否启动节点
+ros_interface:
+  node_name: Finger_Retarget_left                #节点名字
+  rate: 100                                     #节点控制频率
+  sub_topic:
+    tf_target: "/io_align/tf_hand"              #模块需要输入的手控制数据
+    joint_state: "/io_teleop/joint_states"      #模块需要输入的关节状态角度（当前版本可不需要）
+  pub_topic:
+    joint_target: "/io_teleop/joint_cmd_finger_left" #模块输出的手指控制关节角
+
+model:
+  urdf: urdf/Inspire_RH5DG2.urdf                     #要控制的机械手urdf
+  free_joints: [                                #urdf中可活动的关节
+        left_thumb_yaw_joint,
+        left_thumb_mcp_joint,
+        left_thumb_dip_joint,
+        left_thumb_pip_joint,
+        left_index_yaw_joint,
+        left_index_mcp_joint,
+        left_index_pip_joint,
+        left_index_dip_joint,
+        left_middle_yaw_joint,
+        left_middle_mcp_joint,
+        left_middle_pip_joint,
+        left_middle_dip_joint,
+        left_ring_mcp_joint,
+        left_ring_pip_joint,
+        left_ring_dip_joint,
+        left_pinky_mcp_joint,
+        left_pinky_pip_joint,
+        left_pinky_dip_joint,
+  ]
+task:
+  pose:    #手指pose跟踪任务
+  # [手掌link, 手指link], 位置跟踪权重, 姿态跟踪权重, 手指运动位置scale] 
+        [
+          [["left_hand_ee_link", "left_thumb_tip"], 1, 0, 1.5],
+          [["left_hand_ee_link", "left_index_tip"], 1, 0, 1.5],
+          [["left_hand_ee_link", "left_middle_tip"], 1, 0, 1.5],
+          [["left_hand_ee_link", "left_ring_tip"], 1, 0, 1.5],
+          [["left_hand_ee_link", "left_pinky_tip"], 1, 0, 1.5],
+        ]
+  vector:    #手指间位置跟踪任务
+  # [[手掌link, 手指link1, 手指link2], 任务开启阈值, 最大权重, 吸附阈值]/dan
+          [
+            [["left_hand_ee_link", "left_thumb_tip", "left_index_tip"], 0.03, 400, 0.00],
+            [["left_hand_ee_link", "left_thumb_tip", "left_middle_tip"], 0.03, 400, 0.00],
+            [["left_hand_ee_link", "left_thumb_tip", "left_ring_tip"], 0.03, 400, 0.00],
+            [["left_hand_ee_link", "left_thumb_tip", "left_pinky_tip"], 0.03, 400, 0.0],
+          ]
+  smooth: 0.1  
+
+# 根据URDF文件中的mimic标签，这18个REVOLUTE关节分为：
+
+# 13个主动关节（可独立控制）：
+
+# 拇指（3个）：
+
+# left_thumb_yaw_joint
+# left_thumb_mcp_joint
+# left_thumb_dip_joint
+
+
+# 食指（3个）：
+# left_index_yaw_joint
+# left_index_mcp_joint
+# left_index_pip_joint
+
+
+# 中指（3个）：
+# left_middle_yaw_joint
+# left_middle_mcp_joint
+# left_middle_pip_joint
+
+
+
+# 无名指（2个）：
+# left_ring_mcp_joint
+# left_ring_pip_joint
+
+
+
+# 小指（2个）：
+# left_pinky_mcp_joint
+# left_pinky_pip_joint
+
+
+# 5个从动关节（跟随主动关节运动）：
+
+# left_thumb_pip_joint - 跟随 left_thumb_mcp_joint（系数1.0853）
+# left_index_dip_joint - 跟随 left_index_pip_joint（系数1.1232）
+# left_middle_dip_joint - 跟随 left_middle_pip_joint（系数1.1232）
+# left_ring_dip_joint - 跟随 left_ring_pip_joint（系数1.1232）
+# left_pinky_dip_joint - 跟随 left_pinky_pip_joint（系数1.1232）
+

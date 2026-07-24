@@ -1,0 +1,1974 @@
+<!DOCTYPE html>
+<!-- io_gateway Web 控制台：选手型、侧别、查看状态与 WS 数据流 -->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IO Gesture</title>
+  <!-- 不使用 Google Fonts：外网 CSS 会阻塞首屏，离线/内网环境可能等待数十秒 -->
+  <style>
+    :root {
+      --brand-black: #1E1B17;
+      --brand-green: #7FC42A;
+      --brand-gray: #A9B4B3;
+      --brand-white: #FFFFFF;
+      --bg-deep: #f3f4f3;
+      --bg-panel: var(--brand-white);
+      --surface-soft: #f8f9f8;
+      --surface-inset: #f1f2f1;
+      --border: rgba(169, 180, 179, 0.55);
+      --border-strong: var(--brand-gray);
+      --accent: var(--brand-green);
+      --accent-dim: #9ed654;
+      --accent-dark: #6aa822;
+      --accent-secondary: var(--brand-green);
+      --accent-glow: rgba(127, 196, 42, 0.2);
+      --text: var(--brand-black);
+      --text-muted: #5a5854;
+      --text-dim: var(--brand-gray);
+      --success: var(--brand-green);
+      --warn: #c9a227;
+      --danger: #c44a3a;
+      --shadow: rgba(30, 27, 23, 0.08);
+      --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+      --display: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --radius: 8px;
+      --radius-sm: 6px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: auto;
+      font-family: var(--display);
+      font-size: 15px;
+      line-height: 1.6;
+      color: var(--text);
+      background-color: var(--bg-deep);
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      width: 100%;
+    }
+    .main-content {
+      min-height: 100vh;
+      overflow: visible;
+    }
+    .view { display: block; }
+
+    .page {
+      width: 100%;
+      max-width: min(1920px, 100%);
+      margin: 0 auto;
+      padding: clamp(1rem, 3vw, 2rem) clamp(0.75rem, 4vw, 1.5rem) clamp(2rem, 4vw, 3rem);
+      box-sizing: border-box;
+    }
+    /** 外骨骼 / 灵巧手左右并排：标题、首行功能、URDF 各行对齐 */
+    .layout-dual-modules {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.75rem, 2vw, 1.25rem);
+      align-items: stretch;
+      margin-top: 1.25rem;
+      width: 100%;
+      min-width: 0;
+    }
+    .module-section--grid {
+      display: contents;
+    }
+    .dual-slot-title {
+      grid-row: 1;
+      margin: 0 0 1.25rem;
+      padding-bottom: 0.65rem;
+    }
+    .dual-slot-row1 {
+      grid-row: 2;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .dual-slot-urdf {
+      grid-row: 3;
+      min-width: 0;
+    }
+    .dual-col-exo,
+    .dual-col-hand {
+      min-width: 0;
+    }
+    .dual-col-exo { grid-column: 1; }
+    .dual-col-hand { grid-column: 2; }
+    .dual-slot-row1 > .panel,
+    .dual-slot-urdf > .panel {
+      margin-top: 0;
+    }
+    .dual-slot-row1 > .panel-device-connect,
+    .dual-slot-row1 > .panel-hand-config {
+      flex: 1;
+      min-height: 100%;
+    }
+    .panel-device-connect,
+    .panel-hand-config {
+      display: flex;
+      flex-direction: column;
+    }
+    .panel-device-connect .connect-sections-row {
+      flex: 1 1 auto;
+      min-height: 0;
+      align-items: stretch;
+    }
+    .panel-hand-config .connect-sections-row {
+      flex: 1;
+      min-height: 0;
+    }
+    .connect-section {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .connect-section .section-label {
+      flex-shrink: 0;
+    }
+    .connect-wired .ports-display {
+      flex: 0 0 auto;
+    }
+    .hand-select-section .btn-row,
+    .connect-module-actions {
+      margin-top: auto;
+      padding-top: 1rem;
+    }
+    .hand-upload-footer {
+      margin-top: auto;
+      padding-top: 1rem;
+      width: 100%;
+    }
+    .hand-upload-footer .btn-row {
+      margin-top: 0;
+      padding-top: 0;
+      width: 100%;
+    }
+    .hand-select-section .hand-checkboxes {
+      flex: 0 0 220px;
+      height: 220px;
+      min-height: 220px;
+      max-height: 220px;
+      width: 100%;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    .hand-upload-section .field {
+      flex-shrink: 0;
+      margin-top: 0;
+      margin-bottom: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .hand-upload-section .field input {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .hand-name-row {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      width: 100%;
+    }
+    .hand-name-row input {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .btn-upload-clear {
+      flex: 0 0 auto;
+      width: 1.75rem;
+      height: 1.75rem;
+      margin: 0;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-soft);
+      color: var(--text-muted);
+      font-size: 1.15rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .btn-upload-clear:hover,
+    .btn-upload-clear:focus-visible {
+      color: var(--danger);
+      border-color: var(--danger);
+      background: var(--brand-white);
+    }
+    .hand-upload-section .upload-drop {
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+      min-height: 96px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 0.75rem;
+      margin-left: 0;
+      margin-right: 0;
+    }
+    .hand-upload-section #upload-hand {
+      width: 100%;
+    }
+    .hand-upload-section #upload-status {
+      margin: 0 0 0.65rem;
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.45;
+    }
+    .panel-title-note {
+      font-weight: 400;
+      font-size: 0.88em;
+      color: var(--text-dim);
+    }
+    .viz-panel-head {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+      min-height: 2.35rem;
+      margin-bottom: 0.5rem;
+    }
+    .viz-panel-head .panel-title {
+      margin: 0;
+      flex: 0 1 auto;
+    }
+    .viz-panel-head #viz-hand-pick {
+      flex: 1 1 10rem;
+      min-width: 8rem;
+      max-width: 100%;
+      margin: 0;
+    }
+    .module-section {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 2px solid var(--border);
+      scroll-margin-top: 1rem;
+    }
+    .module-section:first-of-type {
+      margin-top: 1.25rem;
+      padding-top: 0;
+      border-top: none;
+    }
+    .module-title {
+      font-family: var(--display);
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      margin: 0 0 1.25rem;
+      padding-bottom: 0.65rem;
+      color: var(--text);
+      border-bottom: 2px solid var(--accent);
+    }
+    .module-section .panel {
+      margin-top: 0;
+    }
+    .module-section .panel + .panel {
+      margin-top: 1.25rem;
+    }
+    .panel-hand-config .hand-current-compact {
+      flex-shrink: 0;
+      margin-bottom: 1rem;
+    }
+    .section-label-row {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
+      margin-bottom: 0.5rem;
+    }
+    .section-label-row .section-label {
+      margin-bottom: 0;
+    }
+    .panel-device-connect .connect-wired > .section-label-row,
+    .panel-device-connect .wireless-status-block > .section-label-row {
+      align-items: center;
+      gap: 0.35rem;
+      min-height: 0.82rem;
+      margin-bottom: 0.75rem;
+    }
+    .panel-device-connect .connect-wired > .section-label-row .hint-trigger,
+    .panel-device-connect .wireless-status-block .hint-trigger--placeholder {
+      width: 0.82rem;
+      height: 0.82rem;
+      font-size: 0.58rem;
+    }
+    .panel-device-connect .connect-wired > .ports-display,
+    .panel-device-connect .wireless-status-block .connect-module-box {
+      margin-top: 0;
+    }
+    .panel-device-connect .wireless-status-block .connect-module-box .ports-display {
+      margin-top: 0;
+    }
+    .panel-device-connect .wireless-provision-block .hint-trigger {
+      width: 1rem;
+      height: 1rem;
+      font-size: 0.65rem;
+    }
+    .panel-device-connect .hint-trigger--placeholder {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .viz-models-row,
+    .viz-charts-row,
+    .viz-hand-charts-row,
+    .viz-exo-joints-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.75rem, 2vw, 1.25rem);
+      margin-top: 1rem;
+    }
+    .viz-exo-panel .viz-exo-joints-row,
+    .viz-exo-panel .viz-exo-charts-stack,
+    .viz-hand-panel .viz-exo-joints-row,
+    .viz-hand-panel .viz-hand-charts-stack {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+    .viz-hand-charts-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .viz-exo-charts-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .viz-exo-chart-block,
+    .viz-hand-chart-block { min-width: 0; }
+    .viz-subtitle {
+      margin: 0 0 0.35rem;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0;
+    }
+    .viz-chart-meta {
+      margin: 0.25rem 0 0.35rem;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: ui-monospace, monospace;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .viz-joint-meta { display: none; }
+    .viz-panel { margin-top: 0; min-width: 0; }
+    .viz-canvas-wrap {
+      width: 100%;
+      height: min(38vh, 340px);
+      min-height: 180px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      background: var(--surface-inset);
+    }
+    .viz-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+    .viz-status {
+      margin: 0.5rem 0 0;
+      font-size: 12px;
+      color: var(--text-dim);
+      word-break: break-all;
+    }
+    .viz-chart-row {
+      display: grid;
+      grid-template-columns: 1fr minmax(92px, 36%);
+      gap: 0.4rem;
+      align-items: stretch;
+      min-width: 0;
+    }
+    .viz-chart-row > .viz-joint-chart-wrap,
+    .viz-chart-row > .viz-chart-legend-panel {
+      height: min(22vh, 180px);
+      min-height: 140px;
+      box-sizing: border-box;
+    }
+    .viz-chart-row > .viz-joint-chart-wrap {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .viz-chart-row .viz-chart-canvas {
+      width: 100%;
+      min-width: 0;
+    }
+    .viz-chart-row .viz-joint-chart-wrap .viz-chart-canvas {
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+    }
+    .viz-chart-row > .viz-chart-legend-panel {
+      max-height: none;
+    }
+    .viz-chart-canvas {
+      width: 100%;
+      height: min(22vh, 180px);
+      min-height: 140px;
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-inset);
+    }
+    .viz-joint-chart-wrap {
+      position: relative;
+      min-width: 0;
+    }
+    .viz-joint-chart-wrap .viz-chart-canvas {
+      width: 100%;
+      display: block;
+    }
+    .viz-chart-expand-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.12s, color 0.12s, border-color 0.12s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    }
+    .viz-joint-chart-wrap:hover .viz-chart-expand-btn,
+    .viz-chart-expand-btn:focus-visible {
+      opacity: 1;
+    }
+    .viz-chart-expand-btn:hover {
+      color: var(--text);
+      border-color: var(--border-strong);
+      background: #fff;
+    }
+    .viz-chart-expand-btn svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+    .viz-chart-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .viz-chart-lightbox[hidden] {
+      display: none !important;
+    }
+    .viz-chart-lightbox-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(20, 18, 16, 0.52);
+      backdrop-filter: blur(2px);
+    }
+    .viz-chart-lightbox-panel {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      width: min(96vw, 1180px);
+      max-height: min(92vh, 820px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22);
+      overflow: hidden;
+    }
+    .viz-chart-lightbox-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.85rem 1rem 0.65rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+    .viz-chart-lightbox-titles {
+      min-width: 0;
+    }
+    .viz-chart-lightbox-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .viz-chart-lightbox-meta {
+      margin: 0.3rem 0 0;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: ui-monospace, monospace;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .viz-chart-lightbox-close {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-inset);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .viz-chart-lightbox-close:hover {
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+    .viz-chart-lightbox-body {
+      display: grid;
+      grid-template-columns: 1fr minmax(92px, 36%);
+      gap: 0.4rem;
+      align-items: end;
+      padding: 0.75rem 1rem 1rem;
+      min-height: 0;
+      min-width: 0;
+    }
+    .viz-chart-lightbox-chart-cell {
+      min-width: 0;
+      min-height: 0;
+    }
+    .viz-chart-lightbox-canvas {
+      width: 100%;
+      min-width: 0;
+      height: min(68vh, 560px);
+      min-height: 320px;
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-inset);
+      box-sizing: border-box;
+    }
+    .viz-chart-lightbox-legend.viz-chart-legend-panel {
+      max-height: none;
+      min-height: 0;
+      box-sizing: border-box;
+      overflow-y: auto;
+      font: 11px/1.4 var(--mono);
+      color: #1E1B17;
+    }
+    @media (max-width: 720px) {
+      .viz-chart-lightbox-body {
+        grid-template-columns: 1fr minmax(92px, 36%);
+      }
+      .viz-chart-lightbox-canvas {
+        min-height: 240px;
+        height: min(42vh, 360px);
+      }
+    }
+    body.viz-chart-lightbox-open {
+      overflow: hidden;
+    }
+    @media (hover: none) {
+      .viz-chart-expand-btn {
+        opacity: 0.88;
+      }
+    }
+    .viz-chart-canvas-wrap {
+      position: relative;
+      min-width: 0;
+    }
+    .viz-chart-canvas-wrap .viz-chart-canvas {
+      width: 100%;
+      display: block;
+    }
+    .viz-chart-canvas-wrap .viz-chart-rate-legend {
+      position: absolute;
+      top: 6px;
+      left: 46px;
+      right: 4.75rem;
+      z-index: 1;
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.45rem;
+      min-width: 0;
+      margin: 0;
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--text-muted);
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .viz-chart-rate-legend.is-empty {
+      display: none;
+    }
+    .viz-chart-rate-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .viz-chart-rate-legend-swatch {
+      width: 10px;
+      height: 3px;
+      border-radius: 1px;
+      flex-shrink: 0;
+    }
+    .viz-chart-rate-legend-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .viz-chart-canvas-wrap .viz-chart-rate-opts {
+      position: absolute;
+      right: calc(10px - 0.4cm);
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.25rem;
+      min-width: 3.25rem;
+      padding-right: 2px;
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.2;
+      pointer-events: auto;
+    }
+    .viz-chart-rate-opts label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      cursor: pointer;
+      margin: 0;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .viz-chart-rate-opts input {
+      margin: 0;
+      flex-shrink: 0;
+      accent-color: var(--brand-gray);
+    }
+    .viz-chart-legend-panel {
+      max-height: min(22vh, 180px);
+      min-height: 140px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-inset);
+      padding: 4px 4px 4px 6px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) var(--surface-soft);
+    }
+    .viz-chart-legend-panel::-webkit-scrollbar {
+      width: 6px;
+    }
+    .viz-chart-legend-panel::-webkit-scrollbar-thumb {
+      background: var(--border-strong);
+      border-radius: 3px;
+    }
+    .viz-chart-legend-panel::-webkit-scrollbar-track {
+      background: var(--surface-soft);
+    }
+    .viz-chart-legend-panel.is-empty { /* 无数据时保持空白，不显示占位提示 */ }
+    .viz-chart-legend-select-all {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--surface-inset);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2px;
+      font-weight: 600;
+    }
+    .viz-chart-legend-select-all .viz-chart-legend-swatch--spacer {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .viz-chart-legend-select-all-label {
+      user-select: none;
+    }
+    .viz-chart-legend-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 3px 2px;
+      font: 11px/1.4 var(--mono);
+      color: #1E1B17;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: background 0.12s;
+    }
+    .viz-chart-legend-item:hover {
+      background: rgba(0, 0, 0, 0.04);
+    }
+    .viz-chart-legend-item.is-muted {
+      color: #A9B4B3;
+    }
+    .viz-chart-legend-toggle {
+      flex-shrink: 0;
+      margin: 3px 0 0;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border: 1px solid #5a5854;
+      border-radius: 3px;
+      background: transparent;
+      position: relative;
+    }
+    .viz-chart-legend-toggle:checked {
+      background: transparent;
+      border-color: #1E1B17;
+    }
+    .viz-chart-legend-toggle:checked::after {
+      content: "✓";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      font: 11px/1 var(--mono);
+      color: #1E1B17;
+    }
+    /* 图表内联单选按钮 - 黑白无底色 */
+    .viz-chart-inline-opts input[type="radio"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      border: 1px solid var(--text-muted);
+      border-radius: 50%;
+      background: transparent;
+      margin: 0.1rem 0.3rem 0 0;
+      flex-shrink: 0;
+      cursor: pointer;
+      position: relative;
+    }
+    .viz-chart-inline-opts input[type="radio"]:checked {
+      border-color: var(--text);
+    }
+    .viz-chart-inline-opts input[type="radio"]:checked::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text);
+    }
+    .viz-chart-legend-swatch {
+      flex-shrink: 0;
+      width: 12px;
+      height: 4px;
+      margin-top: 5px;
+      border-radius: 1px;
+    }
+    .viz-chart-legend-label {
+      flex: 1;
+      min-width: 0;
+      word-break: break-all;
+      font-family: var(--mono);
+      letter-spacing: 0;
+    }
+
+    .connect-sections-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.75rem, 2vw, 1.25rem);
+      align-items: stretch;
+    }
+    .connect-sections-row > .connect-section {
+      min-width: 0;
+    }
+    .connect-sections-row > .connect-section + .connect-section {
+      padding-left: clamp(0.75rem, 2vw, 1.25rem);
+      border-left: 1px solid var(--border);
+    }
+    .connect-hint {
+      margin: 0.65rem 0 0;
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.45;
+      min-height: 1.2em;
+    }
+    .connect-hint.ok { color: var(--success); }
+    .connect-hint.err { color: var(--danger); }
+    .hand-current-compact {
+      margin-bottom: 1rem;
+      padding: 0.65rem 0.75rem;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      border-left: 3px solid var(--accent);
+    }
+    .hand-current-compact .hand-output-value {
+      display: block;
+      font-size: 0.9rem;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .hand-current-compact .hand-output-hint {
+      margin: 0.35rem 0 0;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .connect-wireless label.field-row {
+      display: grid;
+      grid-template-columns: 4.25rem minmax(0, 1fr);
+      align-items: center;
+      gap: 0.35rem 0.5rem;
+      margin-top: 0.45rem;
+      font-size: 13px;
+      letter-spacing: 0;
+      color: var(--text-muted);
+    }
+    .connect-wireless label.field-row:first-of-type { margin-top: 0.35rem; }
+    .connect-wireless label.field-row > span {
+      text-align: right;
+      white-space: nowrap;
+    }
+    .connect-wireless label.field-row input {
+      margin-top: 0;
+      min-width: 0;
+      padding: 0.4rem 0.6rem;
+      font-size: 13px;
+    }
+    .connect-wireless .password-field-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+    .connect-wireless .password-field-wrap input {
+      width: 100%;
+      padding-right: 2rem;
+    }
+    .connect-wireless .password-toggle {
+      position: absolute;
+      right: 0.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.5rem;
+      height: 1.5rem;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+    }
+    .connect-wireless .password-toggle:hover {
+      color: var(--text);
+      background: var(--surface-soft);
+    }
+    .connect-wireless .password-toggle svg {
+      width: 0.95rem;
+      height: 0.95rem;
+    }
+    .wireless-provision-block {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      margin-top: 1.35rem;
+      padding-top: 1.35rem;
+      border-top: 1px solid var(--border);
+    }
+    .wireless-provision-footer {
+      margin-top: auto;
+      padding-top: 1rem;
+      width: 100%;
+    }
+    .wireless-provision-footer .connect-hint {
+      margin: 0 0 0.5rem;
+    }
+    .wireless-provision-footer .btn-row {
+      margin-top: 0;
+      padding-top: 0;
+    }
+    .wireless-status-block {
+      flex-shrink: 0;
+    }
+    .connect-module-box {
+      margin-top: 0;
+    }
+    .connect-module-box .ports-display {
+      margin-top: 0;
+    }
+    .connect-module-box .port-row {
+      grid-template-columns: 4.5rem minmax(0, 1fr);
+    }
+    .connect-module-box .port-path-ip {
+      color: var(--text);
+    }
+    .connect-module-box .port-path.empty .port-path-ip,
+    .connect-module-box .port-path.empty .port-path-status {
+      color: var(--text-dim);
+      font-style: italic;
+    }
+    .connect-module-box .port-path-status.ok {
+      color: var(--success);
+      font-style: normal;
+    }
+    .connect-module-box .port-row.module-status-row .port-path.err {
+      color: var(--danger);
+    }
+    .connect-module-actions {
+      display: flex;
+    }
+    .connect-module-actions button {
+      margin: 0;
+    }
+    .hand-upload-section .upload-drop {
+      padding: 0.75rem;
+      font-size: 13px;
+    }
+    .panel-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      margin-bottom: 1rem;
+    }
+    .panel-title-row .panel-title {
+      margin: 0;
+    }
+    .hint-wrap {
+      position: relative;
+      display: inline-flex;
+      flex-shrink: 0;
+    }
+    .hint-trigger {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.15rem;
+      height: 1.15rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      line-height: 1;
+      color: var(--text-muted);
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      cursor: help;
+      user-select: none;
+      outline: none;
+    }
+    .hint-trigger:hover,
+    .hint-trigger:focus-visible {
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+    .hint-popover {
+      display: none;
+      position: absolute;
+      left: 0;
+      top: calc(100% + 0.4rem);
+      z-index: 30;
+      width: max-content;
+      max-width: min(300px, 72vw);
+      padding: 0.65rem 0.75rem;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text-muted);
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 4px 14px var(--shadow);
+      pointer-events: none;
+    }
+    .hint-popover code,
+    .hint-popover kbd {
+      font-size: 12px;
+    }
+    .hint-wrap:hover .hint-popover,
+    .hint-wrap:focus-within .hint-popover {
+      display: block;
+    }
+    .layout-terminals {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.75rem, 2vw, 1.25rem);
+      align-items: stretch;
+    }
+    .terminal-block--grow {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-inset);
+    }
+    .terminal-block--grow > h2,
+    .terminal-block--grow .terminal-status-head,
+    .terminal-block--grow .terminal-ws-head {
+      flex-shrink: 0;
+      padding: 0.65rem 0.85rem 0;
+    }
+    .terminal-status-head {
+      padding-bottom: 0.35rem;
+    }
+    .terminal-status-head h2 {
+      margin: 0;
+    }
+    .terminal-status-api {
+      margin: 0.25rem 0 0;
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--text-dim);
+      word-break: break-all;
+      line-height: 1.35;
+    }
+    .gateway-status-banner {
+      margin: 0.45rem 0 0;
+      padding: 0.45rem 0.6rem;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #8a4b00;
+      background: rgba(255, 193, 7, 0.14);
+      border: 1px solid rgba(255, 193, 7, 0.45);
+      border-radius: var(--radius-sm);
+    }
+    .gateway-status-banner[hidden] {
+      display: none !important;
+    }
+    .terminal-block--grow .terminal-ws-head {
+      padding-bottom: 0.35rem;
+    }
+    .terminal-block--grow pre,
+    .terminal-block--grow #status,
+    .terminal-block--grow #ws {
+      flex: 1 1 auto;
+      min-height: calc(16rem + 6cm);
+      max-height: min(calc(360px + 6cm), calc(40vh + 6cm));
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      border-top: 1px solid var(--border);
+    }
+    .terminal-ws-head {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.5rem;
+      min-width: 0;
+    }
+    .terminal-ws-head h2 {
+      margin: 0;
+      flex-shrink: 0;
+    }
+    .terminal-ws-pick {
+      flex: 1;
+      min-width: 10rem;
+      max-width: 100%;
+      margin: 0;
+      font-size: 13px;
+    }
+    .terminal-ws-hint {
+      margin: 0.25rem 0 0.35rem;
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.35;
+    }
+    @media (max-width: 900px) {
+      .layout-dual-modules {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .dual-col-exo,
+      .dual-col-hand {
+        grid-column: 1;
+      }
+      .dual-col-exo.dual-slot-title { grid-row: 1; }
+      .dual-col-exo.dual-slot-row1 { grid-row: 2; }
+      .dual-col-exo.dual-slot-urdf { grid-row: 3; }
+      .dual-col-hand.dual-slot-title {
+        grid-row: 4;
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 2px solid var(--border);
+      }
+      .dual-col-hand.dual-slot-row1 { grid-row: 5; }
+      .dual-col-hand.dual-slot-urdf { grid-row: 6; }
+      .viz-models-row,
+      .viz-charts-row,
+      .viz-hand-charts-row,
+      .viz-exo-joints-row {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 768px) {
+      .connect-sections-row {
+        grid-template-columns: 1fr;
+      }
+      .connect-sections-row > .connect-section + .connect-section {
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid var(--border);
+      }
+      .layout-terminals {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .header {
+      margin-bottom: 2rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+    .header-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .lang-switch {
+      display: flex;
+      gap: 0;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .lang-switch button {
+      margin: 0;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      letter-spacing: 0;
+      border: none;
+      border-radius: 0;
+      background: var(--surface-soft);
+      color: var(--text-muted);
+    }
+    .lang-switch button:hover {
+      color: var(--text);
+      box-shadow: none;
+      background: var(--surface-soft);
+    }
+    .lang-switch button.active {
+      color: var(--brand-black);
+      background: rgba(127, 196, 42, 0.14);
+      font-weight: 600;
+      box-shadow: none;
+    }
+    .lang-switch button + button {
+      border-left: 1px solid var(--border);
+    }
+    .header::after {
+      display: none;
+    }
+
+    h1 {
+      font-family: var(--display);
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: 0;
+      margin: 0 0 0.5rem;
+      color: var(--text);
+      display: flex;
+      align-items: baseline;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+    }
+    .header-version {
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-dim);
+      font-family: ui-monospace, monospace;
+      letter-spacing: 0.02em;
+    }
+    .tagline {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .panel-hands-select {
+      margin-top: 0;
+    }
+
+    .ports-display {
+      display: grid;
+      gap: 0.5rem;
+      margin-top: 0.25rem;
+      /* 预留两行状态卡高度，避免首屏 JS 未渲染前塌陷留白 */
+      min-height: 5.75rem;
+    }
+    .port-row {
+      display: grid;
+      grid-template-columns: 4.5rem 1fr auto;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.55rem 0.75rem;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .port-side {
+      font-size: 12px;
+      letter-spacing: 0;
+      color: var(--text-muted);
+    }
+    .port-path {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .port-path.empty { color: var(--text-dim); font-style: italic; }
+    .port-badge {
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.45rem;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    .port-badge.on {
+      color: var(--accent-dark);
+      border-color: rgba(127, 196, 42, 0.45);
+      background: rgba(127, 196, 42, 0.12);
+    }
+    #port-toast-container {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-width: min(360px, calc(100vw - 2rem));
+      pointer-events: none;
+    }
+    .port-toast {
+      padding: 0.65rem 0.9rem;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+      background: var(--brand-white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 4px 12px var(--shadow);
+      opacity: 0;
+      transform: translateX(1rem);
+      transition: opacity 0.25s, transform 0.25s;
+    }
+    .port-toast.show {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    .port-toast.warn {
+      border-left: 3px solid var(--danger);
+    }
+    .port-toast.ok {
+      border-left: 3px solid var(--success);
+    }
+    .port-toast.info {
+      border-left: 3px solid var(--accent);
+    }
+
+    .panel {
+      margin-top: 1.25rem;
+      padding: 1.25rem 1.35rem;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: none;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .panel-title {
+      font-family: var(--display);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--text);
+      margin: 0 0 1rem;
+    }
+    .panel > p {
+      margin: 0 0 0.75rem;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    label.field {
+      display: block;
+      margin-top: 1rem;
+      color: var(--text-muted);
+      font-size: 12px;
+      letter-spacing: 0.05em;
+    }
+    label.field:first-of-type { margin-top: 0; }
+
+    select, input[type="text"], input[type="password"] {
+      display: block;
+      margin-top: 0.4rem;
+      width: 100%;
+      max-width: 100%;
+      padding: 0.55rem 0.75rem;
+      font-family: var(--display);
+      font-size: 14px;
+      color: var(--text);
+      background: var(--brand-white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    select:focus, input[type="text"]:focus, input[type="password"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    select:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+
+    .connect-wireless .btn-row,
+    .hand-select-section > .btn-row,
+    .connect-module-actions {
+      justify-content: flex-end;
+    }
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 1.25rem;
+    }
+    button {
+      font-family: var(--display);
+      font-size: 0.95rem;
+      font-weight: 500;
+      letter-spacing: 0;
+      padding: 0.5rem 1rem;
+      color: var(--brand-white);
+      background: var(--brand-black);
+      border: 1px solid var(--brand-black);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+      box-shadow: none;
+    }
+    button:hover {
+      background: #3a3632;
+      border-color: #3a3632;
+      color: var(--brand-white);
+      box-shadow: none;
+    }
+    button:active { transform: translateY(1px); }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    #wifi-provision {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--brand-black);
+    }
+    #wifi-provision:hover {
+      background: var(--accent-dim);
+      border-color: var(--accent-dim);
+      color: var(--brand-black);
+    }
+    #apply {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--brand-black);
+    }
+    #apply:hover {
+      background: var(--accent-dim);
+      border-color: var(--accent-dim);
+      color: var(--brand-black);
+    }
+    #udp-exo-toggle {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--brand-black);
+    }
+    #udp-exo-toggle:hover:not(:disabled) {
+      background: var(--accent-dim);
+      border-color: var(--accent-dim);
+      color: var(--brand-black);
+    }
+    #udp-exo-toggle[data-udp-active="1"] {
+      background: var(--brand-black);
+      border-color: var(--brand-black);
+      color: var(--brand-white);
+    }
+    #udp-exo-toggle[data-udp-active="1"]:hover:not(:disabled) {
+      background: #3a3632;
+      border-color: #3a3632;
+      color: var(--brand-white);
+    }
+    .btn-refresh-inline {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      padding: 0;
+      color: var(--text-muted);
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .btn-refresh-inline .btn-refresh-icon {
+      display: block;
+      width: 14px;
+      height: 14px;
+    }
+    .btn-refresh-inline:hover {
+      color: var(--text);
+      background: var(--surface-soft);
+    }
+
+    .section-label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+
+    .hand-select-section .section-label-row {
+      width: 100%;
+    }
+    .hand-checkboxes {
+      margin-top: 0.35rem;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0.65rem 0.75rem;
+      background: var(--surface-soft);
+    }
+    .hand-checkboxes::-webkit-scrollbar { width: 6px; }
+    .hand-checkboxes::-webkit-scrollbar-thumb {
+      background: var(--border-strong);
+      border-radius: 3px;
+    }
+    .hand-checkboxes label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0.3rem 0;
+      min-width: 0;
+      word-break: break-word;
+      cursor: pointer;
+      font-weight: normal;
+      color: var(--text);
+      transition: color 0.15s;
+    }
+    .hand-checkboxes label:hover { color: var(--text); }
+    .hand-checkboxes input {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .upload-box { margin-top: 0; }
+    .upload-box h2.panel-title { margin-bottom: 0.75rem; }
+
+    code, kbd {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    kbd { border-color: var(--border-strong); }
+
+    #upload-status {
+      margin-top: 0.75rem;
+      font-size: 13px;
+      color: var(--text-muted);
+      min-height: 1.2em;
+    }
+    #upload-status.ok { color: var(--success); }
+    #upload-status.err { color: var(--danger); }
+
+    .upload-drop {
+      margin-top: 0.75rem;
+      padding: 1.25rem 1rem;
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius-sm);
+      text-align: center;
+      color: var(--text-muted);
+      cursor: pointer;
+      background: var(--surface-soft);
+      transition: border-color 0.15s, background 0.15s;
+      box-sizing: border-box;
+    }
+    .upload-drop-text {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+      max-width: 100%;
+      line-height: 1.45;
+    }
+    .upload-drop-main {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 500;
+      color: inherit;
+    }
+    .upload-drop-hint {
+      margin: 0;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .upload-drop-hint kbd {
+      font-size: 11px;
+    }
+    .upload-drop:hover {
+      border-color: var(--text-dim);
+      color: var(--text);
+      background: var(--brand-white);
+    }
+    .upload-drop.dragover {
+      border-color: var(--accent);
+      background: rgba(127, 196, 42, 0.06);
+      color: var(--text);
+    }
+    .upload-drop.has-selection {
+      border-style: solid;
+      border-color: var(--accent);
+      background: rgba(127, 196, 42, 0.04);
+      color: var(--text);
+    }
+    .upload-drop-idle[hidden],
+    .upload-drop-selected[hidden] {
+      display: none !important;
+    }
+
+    .terminal-block {
+      margin-top: 0;
+      min-width: 0;
+    }
+    .terminal-block:not(.terminal-block--grow) pre {
+      max-height: min(320px, 35vh);
+    }
+    .terminal-block h2 {
+      font-family: var(--display);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--text);
+      margin: 0 0 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .terminal-block h2::before {
+      display: none;
+    }
+    pre {
+      margin: 0;
+      padding: 1rem 1.1rem;
+      overflow: auto;
+      max-height: 320px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--surface-inset);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    #ws { color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <main class="main-content">
+      <div id="view-main" class="view">
+        <div class="page">
+          <header class="header">
+            <div class="header-top">
+              <div>
+                <h1>
+                  <span data-i18n="page.title">IO Gesture</span>
+                  {% if gateway_version %}<span class="header-version">{{ gateway_version }}</span>{% endif %}
+                </h1>
+                <p class="tagline" data-i18n="tagline">外骨骼手套 · 灵巧手操控平台</p>
+              </div>
+              <div class="lang-switch" role="group" aria-label="Language">
+                <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+                <button type="button" data-lang="en" aria-pressed="false">EN</button>
+              </div>
+            </div>
+          </header>
+
+          <div class="layout-dual-modules">
+          <section id="section-exo" class="module-section module-section--grid">
+            <h2 class="module-title dual-col-exo dual-slot-title" data-i18n="section.exoModule">外骨骼</h2>
+
+            <div class="dual-col-exo dual-slot-row1">
+            <section class="panel panel-device-connect" id="exo-ports-panel">
+              <h3 class="panel-title">
+                <span data-i18n="panel.deviceConnect">设备连接</span><span class="panel-title-note" data-i18n="deviceConnect.hintInline">（左右手端口查询间隔为 3s）</span>
+              </h3>
+              <div class="connect-sections-row">
+                <div class="connect-section connect-wired">
+                  <div class="section-label-row">
+                    <span class="section-label" data-i18n="section.wired">外骨骼连接状态</span>
+                    <span class="hint-wrap">
+                      <span class="hint-trigger" tabindex="0" role="button" data-i18n-aria-label="deviceStatus.hintAria" aria-label="查看设备连接说明">?</span>
+                      <span class="hint-popover" data-i18n="deviceStatus.hint" role="tooltip">外骨骼有线连接会自动扫描并识别左右手端口，无线连接需手动配网后点击 UDP 启动按钮</span>
+                    </span>
+                  </div>
+                  <div id="exo-ports-display" class="ports-display">
+                    <div class="port-row">
+                      <span class="port-side" data-i18n="ports.sideLeft">左手</span>
+                      <code class="port-path empty" data-i18n="ports.na">未连接</code>
+                      <span class="port-badge" data-i18n="ports.na">未连接</span>
+                    </div>
+                    <div class="port-row">
+                      <span class="port-side" data-i18n="ports.sideRight">右手</span>
+                      <code class="port-path empty" data-i18n="ports.na">未连接</code>
+                      <span class="port-badge" data-i18n="ports.na">未连接</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="connect-section connect-wireless" id="wireless-panel">
+                  <div class="wireless-status-block">
+                    <div class="section-label-row">
+                      <span class="section-label" data-i18n="section.wirelessModuleStatus">无线模块状态</span>
+                      <span class="hint-wrap" aria-hidden="true">
+                        <span class="hint-trigger hint-trigger--placeholder" tabindex="-1">?</span>
+                      </span>
+                    </div>
+                    <div class="connect-module-box">
+                      <div id="udp-module-display" class="ports-display">
+                        <div class="port-row">
+                          <span class="port-side" data-i18n="field.wifiIp1">IP1</span>
+                          <code class="port-path empty"><span class="port-path-ip" data-i18n="wifi.noOnlineDevice">未检测到在线设备</span></code>
+                        </div>
+                        <div class="port-row">
+                          <span class="port-side" data-i18n="field.wifiIp2">IP2</span>
+                          <code class="port-path empty"><span class="port-path-ip" data-i18n="wifi.noOnlineDevice">未检测到在线设备</span></code>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="wireless-provision-block">
+                    <div class="section-label-row">
+                      <span class="section-label" data-i18n="section.wireless">无线模块配网</span>
+                      <span class="hint-wrap">
+                        <span class="hint-trigger" tabindex="0" role="button" data-i18n-aria-label="wifi.hintAria" aria-label="查看无线配网说明">?</span>
+                        <span class="hint-popover" data-i18n="wifi.provisionHint" role="tooltip">回调 IP 须填路由器/网关地址，勿填本机 IP，也不要把 PC 地址当成网关填入。配网前请确认本机已连接目标 WiFi，且能 ping 通该网关地址。</span>
+                      </span>
+                    </div>
+                    <label class="field field-row"><span data-i18n="field.wifiSsid">SSID：</span>
+                      <input type="text" id="wifi-ssid" autocomplete="off" spellcheck="false" data-i18n-placeholder="wifiSsid.placeholder" placeholder="IO-AI-2.4G" />
+                    </label>
+                    <label class="field field-row"><span data-i18n="field.wifiPassword">密码：</span>
+                      <span class="password-field-wrap">
+                        <input type="password" id="wifi-password" autocomplete="new-password" data-i18n-placeholder="wifiPassword.placeholder" placeholder="路由器密码" />
+                        <button type="button" id="wifi-password-toggle" class="password-toggle" aria-label="显示密码" title="显示密码">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                        </button>
+                      </span>
+                    </label>
+                    <label class="field field-row"><span data-i18n="field.returnIp">回调 IP：</span>
+                      <input type="text" id="wifi-return-ip" autocomplete="off" spellcheck="false" data-i18n-placeholder="returnIp.placeholder" placeholder="10.42.0.1" />
+                    </label>
+                    <div class="wireless-provision-footer">
+                      <p id="wifi-status" class="connect-hint"></p>
+                      <div class="btn-row">
+                        <button id="wifi-provision" type="button" data-i18n="btn.wifiProvision">开始配网</button>
+                        <button id="wifi-save-config" type="button" data-i18n="btn.wifiSave" data-i18n-title="btn.wifiSaveTitle" title="保存网络配置刷新自动填充">保存网络</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            </div>
+
+            <div class="dual-col-exo dual-slot-urdf">
+            <section class="panel viz-panel viz-exo-panel">
+              <div class="viz-panel-head">
+                <h3 class="panel-title" data-i18n="viz.exoModel">外骨骼 URDF</h3>
+              </div>
+              <div id="viz-exo-canvas" class="viz-canvas-wrap"></div>
+              <div class="viz-exo-charts-stack">
+                <div class="viz-exo-joints-row">
+                  <div class="viz-exo-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartExoLeft">左侧外骨骼关节</h4>
+                    <p id="chart-exo-left-meta" class="viz-chart-meta viz-joint-meta" hidden>—</p>
+                    <div class="viz-chart-row">
+                      <canvas id="chart-exo-left-joint" class="viz-chart-canvas"></canvas>
+                      <div id="chart-exo-left-legend" class="viz-chart-legend-panel is-empty" role="list" aria-label="Chart legend"></div>
+                    </div>
+                  </div>
+                  <div class="viz-exo-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartExoRight">右侧外骨骼关节</h4>
+                    <p id="chart-exo-right-meta" class="viz-chart-meta viz-joint-meta" hidden>—</p>
+                    <div class="viz-chart-row">
+                      <canvas id="chart-exo-right-joint" class="viz-chart-canvas"></canvas>
+                      <div id="chart-exo-right-legend" class="viz-chart-legend-panel is-empty" role="list" aria-label="Chart legend"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="viz-exo-joints-row">
+                  <div class="viz-exo-chart-block viz-rate-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartExoRate">数据输出频率</h4>
+                    <p id="chart-exo-rate-meta" class="viz-chart-meta" data-i18n="viz.chartRateMetaEmpty">—</p>
+                    <div class="viz-chart-canvas-wrap">
+                      <div id="chart-exo-rate-legend" class="viz-chart-rate-legend is-empty" aria-label="Chart legend"></div>
+                      <canvas id="chart-exo-rate" class="viz-chart-canvas"></canvas>
+                      <div class="viz-chart-rate-opts" role="group" aria-label="Y axis mode">
+                        <label>
+                          <input type="radio" name="exo-rate-yaxis" value="fixed" checked />
+                          <span data-i18n="viz.chartRateYFixed">固定</span>
+                        </label>
+                        <label>
+                          <input type="radio" name="exo-rate-yaxis" value="auto" />
+                          <span data-i18n="viz.chartRateYAuto">动态</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="viz-exo-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartExoVibration">振动反馈强度</h4>
+                    <p id="chart-exo-vibration-meta" class="viz-chart-meta" data-i18n="viz.chartExoVibrationMetaEmpty">—</p>
+                    <canvas id="chart-exo-vibration" class="viz-chart-canvas"></canvas>
+                  </div>
+                </div>
+              </div>
+            </section>
+            </div>
+          </section>
+
+          <section id="section-hand" class="module-section module-section--grid">
+            <h2 class="module-title dual-col-hand dual-slot-title" data-i18n="section.handModule">灵巧手</h2>
+
+            <div class="dual-col-hand dual-slot-row1">
+            <section class="panel panel-hand-config" id="hand-config-panel">
+              <h3 class="panel-title">
+                <span data-i18n="section.modelConfig">型号配置</span><span class="panel-title-note" data-i18n="hand.hint">（勾选后点「应用」；不勾选再点应用将清除已选型号）</span>
+              </h3>
+              <div class="hand-current-compact">
+                <span class="section-label" data-i18n="hand.currentLabel">当前型号</span>
+                <strong id="hand-selected" class="hand-output-value">未选择</strong>
+              </div>
+              <div class="connect-sections-row">
+                <div class="connect-section hand-select-section panel-hands-select">
+                  <div class="section-label-row">
+                    <span class="section-label" data-i18n="panel.handSelect">型号选择（可多选）</span>
+                    <button id="refresh-hands" type="button" class="btn-refresh-inline" data-i18n-aria-label="btn.refreshHandsTitle" data-i18n-title="btn.refreshHandsTitle" title="刷新型号列表" aria-label="刷新型号列表">
+                      <svg class="btn-refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                        <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.83 1 6.5 2.62" />
+                        <polyline points="21 3 21 9 15 9" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div id="hand-checkboxes" class="hand-checkboxes"></div>
+                  <div class="btn-row">
+                    <button id="apply" type="button" disabled data-i18n="btn.apply">应用</button>
+                  </div>
+                </div>
+                <div class="connect-section hand-upload-section upload-box">
+                  <div class="section-label-row">
+                    <span class="section-label" data-i18n="panel.upload">上传灵巧手型号配置</span>
+                    <span class="hint-wrap">
+                      <span class="hint-trigger" tabindex="0" role="button" data-i18n-aria-label="upload.hintAria" aria-label="查看上传说明">?</span>
+                      <span class="hint-popover" data-i18n-html="upload.desc" role="tooltip">文件夹与压缩包须为同一标准结构：型号名/urdf/、型号名/meshes/ 及 3 个必选 yml。请直接选择型号根目录，不会自动调整路径。</span>
+                    </span>
+                  </div>
+                  <label class="field"><span data-i18n="field.handName">识别型号名（自动填写，只读）</span>
+                    <div class="hand-name-row">
+                      <input type="text" id="hand-name" data-i18n-placeholder="handName.placeholder" placeholder="选择配置后自动填写" readonly />
+                      <button type="button" id="upload-clear" class="btn-upload-clear" hidden
+                        data-i18n-aria-label="upload.clearAria" data-i18n-title="upload.clearTitle"
+                        aria-label="清除已选配置" title="清除选择">×</button>
+                    </div>
+                  </label>
+                  <div class="upload-drop" id="upload-drop">
+                    <div class="upload-drop-text upload-drop-idle" id="upload-drop-idle" data-i18n-html="upload.drop">
+                      <p class="upload-drop-main">拖放压缩包或型号根文件夹到此处</p>
+                      <p class="upload-drop-hint">压缩包：zip、tar.gz、tgz 等（须含一层型号名目录）</p>
+                      <p class="upload-drop-hint">文件夹：请选型号名/ 根目录 · 点击选压缩包 · <kbd>Shift</kbd>+点击选文件夹</p>
+                    </div>
+                    <div class="upload-drop-text upload-drop-selected" id="upload-drop-selected" hidden>
+                      <p class="upload-drop-main" id="upload-drop-selected-main"></p>
+                      <p class="upload-drop-hint" id="upload-drop-selected-hint"></p>
+                    </div>
+                  </div>
+                  <input type="file" id="hand-upload-input" hidden
+                    accept=".zip,.tar,.gz,.tgz,.tar.gz,.tar.bz2,.tar.xz,.tbz2,.txz,application/zip,application/x-tar,application/gzip" />
+                  <input type="file" id="hand-folder-input" webkitdirectory directory multiple hidden />
+                  <div class="hand-upload-footer">
+                    <div id="upload-status"></div>
+                    <div class="btn-row">
+                      <button id="upload-hand" type="button" data-i18n="btn.upload">上传配置</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            </div>
+
+            <div class="dual-col-hand dual-slot-urdf">
+            <section class="panel viz-panel viz-hand-panel">
+              <div class="viz-panel-head">
+                <h3 class="panel-title" data-i18n="viz.handModel">灵巧手型号 URDF</h3>
+                <select id="viz-hand-pick" data-i18n-placeholder="viz.handPickLabel" aria-label="Selected hands"></select>
+              </div>
+              <div id="viz-hand-canvas" class="viz-canvas-wrap"></div>
+              <div class="viz-hand-charts-stack">
+                <div class="viz-exo-joints-row">
+                  <div class="viz-exo-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartHandLeft">左手关节数据</h4>
+                    <p id="chart-hand-left-meta" class="viz-chart-meta viz-joint-meta" hidden>—</p>
+                    <div class="viz-chart-row">
+                      <canvas id="chart-hand-left-joint" class="viz-chart-canvas"></canvas>
+                      <div id="chart-hand-left-legend" class="viz-chart-legend-panel is-empty" role="list" aria-label="Chart legend"></div>
+                    </div>
+                  </div>
+                  <div class="viz-exo-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartHandRight">右手关节数据</h4>
+                    <p id="chart-hand-right-meta" class="viz-chart-meta viz-joint-meta" hidden>—</p>
+                    <div class="viz-chart-row">
+                      <canvas id="chart-hand-right-joint" class="viz-chart-canvas"></canvas>
+                      <div id="chart-hand-right-legend" class="viz-chart-legend-panel is-empty" role="list" aria-label="Chart legend"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="viz-exo-joints-row">
+                  <div class="viz-exo-chart-block viz-rate-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartHandLeftRate">左手输出频率</h4>
+                    <p id="chart-hand-left-rate-meta" class="viz-chart-meta" data-i18n="viz.chartHandRateMetaEmptyLeft">—</p>
+                    <div class="viz-chart-canvas-wrap">
+                      <div id="chart-hand-left-rate-legend" class="viz-chart-rate-legend is-empty" aria-label="Chart legend"></div>
+                      <canvas id="chart-hand-left-rate" class="viz-chart-canvas"></canvas>
+                      <div class="viz-chart-rate-opts" role="group" aria-label="Y axis mode">
+                        <label>
+                          <input type="radio" name="hand-left-rate-yaxis" value="fixed" checked />
+                          <span data-i18n="viz.chartRateYFixed">固定</span>
+                        </label>
+                        <label>
+                          <input type="radio" name="hand-left-rate-yaxis" value="auto" />
+                          <span data-i18n="viz.chartRateYAuto">动态</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="viz-exo-chart-block viz-rate-chart-block">
+                    <h4 class="viz-subtitle" data-i18n="viz.chartHandRightRate">右手输出频率</h4>
+                    <p id="chart-hand-right-rate-meta" class="viz-chart-meta" data-i18n="viz.chartHandRateMetaEmptyRight">—</p>
+                    <div class="viz-chart-canvas-wrap">
+                      <div id="chart-hand-right-rate-legend" class="viz-chart-rate-legend is-empty" aria-label="Chart legend"></div>
+                      <canvas id="chart-hand-right-rate" class="viz-chart-canvas"></canvas>
+                      <div class="viz-chart-rate-opts" role="group" aria-label="Y axis mode">
+                        <label>
+                          <input type="radio" name="hand-right-rate-yaxis" value="fixed" checked />
+                          <span data-i18n="viz.chartRateYFixed">固定</span>
+                        </label>
+                        <label>
+                          <input type="radio" name="hand-right-rate-yaxis" value="auto" />
+                          <span data-i18n="viz.chartRateYAuto">动态</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            </div>
+          </section>
+          </div>
+
+          <section id="section-monitor" class="module-section">
+            <h2 class="module-title" data-i18n="section.monitor">系统监控</h2>
+            <div class="layout-terminals">
+              <div class="terminal-block terminal-block--grow terminal-block--status">
+                <div class="terminal-status-head">
+                  <h2 data-i18n="terminal.status">状态</h2>
+                  <p class="terminal-status-api" data-i18n="status.apiPath">GET /api/v1/status</p>
+                  <p id="gateway-status-banner" class="gateway-status-banner" role="status" hidden></p>
+                </div>
+                <pre id="status">加载中…</pre>
+              </div>
+              <div class="terminal-block terminal-block--grow terminal-block--ws">
+                <div class="terminal-ws-head">
+                  <h2 data-i18n="terminal.ws">WebSocket 数据</h2>
+                  <select id="ws-stream-pick" class="terminal-ws-pick" aria-label="WebSocket stream">
+                    <option value="" data-i18n="ws.noStream">（暂无数据流）</option>
+                  </select>
+                </div>
+                <p class="terminal-ws-hint" data-i18n="ws.subscribeHint"></p>
+                <pre id="ws">未连接</pre>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="port-toast-container" aria-live="polite"></div>
+
+  <div id="viz-chart-lightbox" class="viz-chart-lightbox" hidden aria-modal="true" role="dialog" aria-labelledby="viz-chart-lightbox-title">
+    <div class="viz-chart-lightbox-backdrop" data-lightbox-dismiss></div>
+    <div class="viz-chart-lightbox-panel">
+      <div class="viz-chart-lightbox-head">
+        <div class="viz-chart-lightbox-titles">
+          <h3 id="viz-chart-lightbox-title" class="viz-chart-lightbox-title"></h3>
+          <p id="viz-chart-lightbox-meta" class="viz-chart-lightbox-meta" hidden></p>
+        </div>
+        <button type="button" id="viz-chart-lightbox-close" class="viz-chart-lightbox-close" data-i18n-aria-label="viz.chartClose" aria-label="关闭">×</button>
+      </div>
+      <div class="viz-chart-lightbox-body">
+        <div class="viz-chart-lightbox-chart-cell">
+          <canvas id="chart-lightbox-joint" class="viz-chart-lightbox-canvas"></canvas>
+        </div>
+        <div id="chart-lightbox-legend" class="viz-chart-legend-panel viz-chart-lightbox-legend is-empty" role="list" aria-label="Chart legend"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/static/vendor/three/build/three.module.js",
+      "three/addons/": "/static/vendor/three/examples/jsm/",
+      "three/examples/jsm/": "/static/vendor/three/examples/jsm/",
+      "urdf-loader": "/static/vendor/urdf-loader/src/URDFLoader.js"
+    }
+  }
+  </script>
+  <script src="/static/i18n.js?v={{ asset_rev }}"></script>
+  <script src="/static/app.js?v={{ asset_rev }}"></script>
+  <script type="module" src="/static/viz.js?v={{ asset_rev }}"></script>
+</body>
+</html>

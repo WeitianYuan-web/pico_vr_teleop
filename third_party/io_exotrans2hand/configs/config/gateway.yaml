@@ -1,0 +1,190 @@
+
+# Web 控制台页面标题后显示的版本号
+version: "V2.0.2"
+
+listen_host: 0.0.0.0
+listen_port: 8080
+end_tools_dir: configs/end_tools
+logs_dir: logs
+
+
+# 轮询串口间隔，单位：秒
+probe_interval_sec: 2.0
+# 防抖次数
+layout_confirm_count: 2
+# 串口重扫失败 N 次前保留已绑定拓扑
+serial_probe_fail_threshold: 2
+# 串口探测排除列表（灵巧手等非外骨骼 ACM/USB 口，永不 probe）
+probe_exclude_ports:
+  - /dev/ttyUSB0
+# 启动延迟，单位：秒
+startup_delay_sec: 2.0
+# 布局未变、exo 掉线后两次自动补启的最小间隔（秒）
+exo_recovery_interval_sec: 5.0
+
+# 应用灵巧手配置：Web「应用」后写入；启动/设备接入时自动应用（无外骨骼不启动手型链）
+hand_choose:
+  - Inspire_RH56F2
+
+# 设备ID
+device_ids:
+  left: 8
+  right: 12
+
+# 无线模块 IP 白名单（最多 2 个，不区分左右；ready>2 时参与筛选，手动维护）
+udp_allowed_ips: []
+
+
+websocket:
+  # WS 推送节流：0 或不填表示不节流（收到即转发）；>0 时每流最多 max_fps 条/秒
+  max_fps: 0
+  # 无手型时仅 global 流；hand-scoped 流见 default_streams_by_side
+  default_streams:
+  - io_esk.tf
+  - io_esk.joint_data
+  - io_esk.imu_data_right
+  - io_esk.imu_data_left
+  default_streams_by_side:
+    left:
+    - io_esk.tf
+    - io_align.tf
+    - io_teleop.joint_cmd_left
+    right:
+    - io_esk.tf
+    - io_align.tf
+    - io_teleop.joint_cmd_right
+    both:
+    - io_esk.tf
+    - io_align.tf
+    - io_teleop.joint_cmd_left
+    - io_teleop.joint_cmd_right
+
+# 运行环境与路径（相对 {root}，由 config_loader 展开；PREFIX 环境变量可覆盖 prefix）
+bundle:
+  prefix: '{root}/bundle/opt/io-deps'
+  python: '{root}/bundle/opt/python/bin/python3'
+  python_lib: '{root}/bundle/opt/python/lib'
+  python_site: '{root}/bundle/python/lib/python3.10/site-packages'
+  # PYTHONPATH 条目（换环境时改 python_site / 下列版本路径即可，勿改代码）
+  pythonpath:
+    - '{python_site}'
+    - '{prefix}/lib/python3.10/site-packages'
+    - '{prefix}/lib/python3/dist-packages'
+    - '{src}'
+    - '{src}/io_bus_proto/generated/python'
+  src: '{root}/src'
+  end_tools: '{root}/configs/end_tools'
+  install_lib: '{root}/bundle/install/lib'
+  zenoh_lib: '{root}/bundle/opt/zenoh/lib'
+  zenoh_config: '{root}/configs/config/zenoh.json5'
+  exo_tf_bin: '{root}/bundle/install/bin/exo_tf_comm'
+  exo_tf_udp_bin: '{root}/bundle/install/bin/exo_tf_udp_comm'
+  transform_bin: '{root}/bundle/install/bin/tf_transform_comm'
+
+
+# 命令设置，根据手型启动不同的命令（占位符见 config_loader.resolve_path_context）
+commands:
+
+  exo_tf: bash -lc 'set -e; export IO_EXOTRANS2HAND_ROOT={root}; export ZENOH_CONFIG={zenoh_config};
+    export LD_LIBRARY_PATH={deps_lib_path}:{zenoh_lib}:$LD_LIBRARY_PATH;
+    exec {exo_tf_bin}'
+
+  exo_tf_udp: bash -lc 'set -e; export IO_EXOTRANS2HAND_ROOT={root}; export ZENOH_CONFIG={zenoh_config};
+    export LD_LIBRARY_PATH={deps_lib_path}:{zenoh_lib}:$LD_LIBRARY_PATH;
+    exec {exo_tf_udp_bin} {udp_bind_ip} {udp_port}'
+
+  transform: bash -lc 'set -e; export IO_EXOTRANS2HAND_ROOT={root}; export ZENOH_CONFIG={zenoh_config};
+    export LD_LIBRARY_PATH={deps_lib_path}:{zenoh_lib}:$LD_LIBRARY_PATH;
+    exec {transform_bin} {end_tools} {hand}'
+
+  controller_left: bash -lc 'set -e; export IO_EXOTRANS2HAND_ROOT={root}; export ZENOH_CONFIG={zenoh_config};
+    export PATH={python_bin}:$PATH; export PREFIX={prefix}; export PYTHONPATH={pythonpath}:$PYTHONPATH;
+    export LD_LIBRARY_PATH={python_lib}:{prefix}/lib:{zenoh_lib}:$LD_LIBRARY_PATH;
+    exec {python} {src}/io_unicontroller/script/run_control_v2_3.py {end_tools} {hand} controller_v2_3_left.yml'
+
+  controller_right: bash -lc 'set -e; export IO_EXOTRANS2HAND_ROOT={root}; export ZENOH_CONFIG={zenoh_config};
+    export PATH={python_bin}:$PATH; export PREFIX={prefix}; export PYTHONPATH={pythonpath}:$PYTHONPATH;
+    export LD_LIBRARY_PATH={python_lib}:{prefix}/lib:{zenoh_lib}:$LD_LIBRARY_PATH;
+    exec {python} {src}/io_unicontroller/script/run_control_v2_3.py {end_tools} {hand} controller_v2_3_right.yml'
+
+# WS 订阅流：增删流只改本段；scope=hand 时按已选手型展开为 {id}.{hand}
+streams_config: # 订阅流配置
+  hand_stream_id_format: "{id}.{hand}"
+
+publish_streams:
+- id: io_esk.vibration_feedback
+  topic: io_esk/vibration_feedback
+  type: Float64MultiArray
+  data_length: 10
+
+streams: # 订阅流（Zenoh key）
+- id: io_esk.tf
+  scope: global
+  topic: io_fusion/tf_exoskeleton
+  type: TFMessage
+- id: io_esk.joint_data
+  scope: global
+  topic: io_esk/joint_data
+  type: JointState
+- id: io_esk.joystick_data
+  scope: global
+  topic: io_esk/joystick_data
+  type: Joy
+- id: io_esk.imu_data_right
+  scope: global
+  topic: io_esk/imu_data_right
+  type: Imu
+- id: io_esk.imu_data_left
+  scope: global
+  topic: io_esk/imu_data_left
+  type: Imu
+- id: io_align.tf
+  scope: hand
+  topic: io_align/tf_hand
+  type: TFMessage
+
+- id: io_teleop.joint_cmd_left
+  scope: hand
+  topic: io_teleop/joint_cmd_finger_left
+  type: JointState
+- id: io_teleop.joint_cmd_right
+  scope: hand
+  topic: io_teleop/joint_cmd_finger_right
+  type: JointState
+
+# pose 实际 key：namespaced(pub_topic.pose) + _<new_parent_frame>，见 tf_transform_v2.yml
+- id: io_align.poses_left
+  scope: hand
+  pose_frame: left_hand_ee_link
+  type: PoseArray
+- id: io_align.poses_right
+  scope: hand
+  pose_frame: right_hand_ee_link
+  type: PoseArray
+
+# 无线配网默认参数（Web 控制台「保存配置」写入）
+wifi_provision:
+  ssid: IO_2.4G_LSFWN
+  password: minnanoIO
+  return_ip: 10.42.0.1
+
+
+
+# UDP 外骨骼探测（与 udp_pkg device_detector 对齐）
+udp_probe:
+  bind_ip: 10.42.0.2
+  port: 8888
+  listen_ms: 1000
+  probe_retries: 2
+  retry_gap_sec: 1.0
+  fail_threshold: 3
+  # 启动 UDP 前要求本机存在 bind_ip 所在 /24 网段地址；调试可设 false
+  require_local_network: true
+
+# 无线模块 UDP 心跳（glove_manager_all / WifiModuleService）
+wifi_heartbeat:
+  port: 8889
+  bind_ip: ""
+  alive_timeout_ms: 3000
+  scan_listen_ms: 2000
+  log_max_entries: 200

@@ -18,3 +18,12 @@ backends/jaka/sdk/.venv/
 # Inspire：源码体积大，默认不强制入库；编译产物永不入库
 third_party/InspireHandSDK_Y/build/
 third_party/InspireHandSDK_Y/.cache/
+
+# IO Gesture (io_exotrans2hand)：本机 rsync 整包；大二进制不入库
+third_party/io_exotrans2hand/bundle/
+third_party/io_exotrans2hand/logs/
+third_party/io_exotrans2hand/.cache/
+third_party/io_exotrans2hand/**/*.so
+third_party/io_exotrans2hand/**/*.so.*
+third_party/io_exotrans2hand/**/__pycache__/
+

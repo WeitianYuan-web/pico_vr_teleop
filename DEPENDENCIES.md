@@ -42,6 +42,15 @@ pip install -e ./unitree_sdk2_python
 # 或：export UNITREE_SDK2_PYTHON=/path/to/unitree_sdk2_python
 ```
 
+### IO Gesture（外骨骼控手，与 VR 臂共存）
+
+| 组件 | 随仓？ | 操作 |
+|------|--------|------|
+| `third_party/io_exotrans2hand/` | 否（含 ~740MB bundle） | `./scripts/sync_io_exotrans2hand.sh` |
+| `third_party/InspireHandSDK_Y` | 否 | 编译 Python 绑定；手桥默认 **RH56F2** |
+
+详见 [controllers/io_hand/README.md](controllers/io_hand/README.md)、[third_party/README.md](third_party/README.md)。
+
 ## 快速自检
 
 ```bash

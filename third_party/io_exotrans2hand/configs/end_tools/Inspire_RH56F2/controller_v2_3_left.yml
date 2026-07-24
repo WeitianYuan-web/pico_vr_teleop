@@ -1,0 +1,45 @@
+enable: True
+ros_interface:
+  node_name: Finger_Retarget_left
+  rate: 100
+  sub_topic:
+    tf_target: "/io_align/tf_hand"
+    joint_state: "/io_teleop/joint_states" #joint_states / joint_states_finger
+  pub_topic:
+    joint_target: "/io_teleop/joint_cmd_finger_left" #joint_cmd / target_finger_joints
+
+model:
+  urdf: urdf/RH56F2_dual.urdf
+  free_joints: [
+                left_thumb_1_joint,
+                left_thumb_2_joint,
+                left_thumb_3_joint,
+                left_thumb_4_joint,
+                left_index_1_joint,
+                left_index_2_joint,
+                left_middle_1_joint,
+                left_middle_2_joint,
+                left_ring_1_joint,
+                left_ring_2_joint,
+                left_pinky_1_joint,
+                left_pinky_2_joint,    
+              ]
+task:
+  # [[base_link, targe_link], pos_weight, rot_weight, pos_scale]
+  pose: 
+        [
+          [["left_hand_ee_link", "left_thumb_tip"], 1, 0, 1.0],
+          [["left_hand_ee_link", "left_index_tip"], 1, 0, 1.3],
+          [["left_hand_ee_link", "left_middle_tip"], 1, 0, 1.3],
+          [["left_hand_ee_link", "left_ring_tip"], 1, 0, 1.3],
+          [["left_hand_ee_link", "left_pinky_tip"], 1, 0, 1.3],
+        ]
+  # [[base_link, targe_link1, target_link2], work_thr, max_weight, adsorption_thr]
+  vector:
+          [
+            [["left_hand_ee_link", "left_thumb_tip", "left_index_tip"], 0.03, 400, 0],
+            [["left_hand_ee_link", "left_thumb_tip", "left_middle_tip"], 0.03, 400, 0],
+            [["left_hand_ee_link", "left_thumb_tip", "left_ring_tip"], 0.03, 400, 0],
+            [["left_hand_ee_link", "left_thumb_tip", "left_pinky_tip"], 0.03, 400, 0],
+          ]
+  smooth: 0.1

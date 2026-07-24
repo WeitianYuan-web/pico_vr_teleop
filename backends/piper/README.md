@@ -28,3 +28,14 @@ backends/piper/
 ```
 
 入口：`entrypoints/piper_dual_webxr.py` → `teleop/dual_arm_dual_hand_webxr.py`。
+
+默认灵巧手机型为 **RH56F2**（`--hand-model`）。若用手部外骨骼 IO 控手、VR 只控臂：
+
+```bash
+./scripts/run_io_gateway.sh
+./scripts/run_io_zenoh2ros.sh
+./scripts/run_io_hand_bridge.sh
+./scripts/run_full_stack.sh --backend piper -- --disable-hands
+```
+
+详见 [controllers/io_hand/README.md](../../controllers/io_hand/README.md)。
