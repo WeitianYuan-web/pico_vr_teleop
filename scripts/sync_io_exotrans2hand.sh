@@ -35,12 +35,13 @@ fi
 
 mkdir -p "${DEST}"
 echo "[sync] ${SRC}/ -> ${DEST}/"
-# 保留本仓为 Jazzy/Py3.12 加的纯 Python codec，以及本地 .cache
+# 保留本仓为 Jazzy/Py3.12 加的纯 Python codec、zenoh2ros --hands 补丁，以及本地 .cache
 rsync -a --delete \
   --exclude '.git/' \
   --exclude 'logs/' \
   --exclude '.cache/' \
   --exclude 'src/io_bus_proto/io_bus_codec.py' \
+  --exclude 'tools/zenoh2ros_bridge.py' \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   "${SRC}/" "${DEST}/"

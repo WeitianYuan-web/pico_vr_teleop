@@ -73,24 +73,37 @@ def get_active_keys(duration=1):
     
     # print(f'active keys: {keys}')
     return keys
-# 提取key中的hand名称
-def get_hand_names():
-    keys = get_active_keys()
+# 从 Zenoh 活跃 key 里扫手型（约 1s；gateway 尚未发布时可能为空）
+def scan_hand_names(duration=1.0):
+    keys = get_active_keys(duration)
     hand_names = []
     for key in keys:
         if 'tf_hand' in key:
-            hand_names.append(key.split('/')[1])
+            parts = key.split('/')
+            if len(parts) >= 2 and parts[1] not in hand_names:
+                hand_names.append(parts[1])
     return hand_names
+
+
+def get_hand_names(explicit_hands=None):
+    """优先合并 --hands；扫描为空时回退显式列表/默认 RH56F2，避免丢 finger topic。"""
+    scanned = scan_hand_names()
+    explicit = [h for h in (explicit_hands or []) if h]
+    hands = list(dict.fromkeys([*scanned, *explicit]))
+    if not hands:
+        hands = ["Inspire_RH56F2"]
+        print("hands scan empty; fallback -> ['Inspire_RH56F2'] (override with --hands)")
+    return hands
+
+
 # 获取所有需要转换的zenoh key与topic-----根据传入的灵巧手名称，添加对应的key与topic
-def create_topics_list():
+def create_topics_list(explicit_hands=None):
     topics = list(GLOBAL_TOPICS)
-    hands = get_hand_names()
+    hands = get_hand_names(explicit_hands)
     print(f'hands: {hands}')
     if hands:
         for hand in hands:
             for zenoh_key, ros_topic, msg_type in HAND_TOPICS:
-            
-                # 添加对应的key与topic
                 topics.append((zenoh_key.format(hand=hand), ros_topic.format(hand=hand), msg_type))
     return topics
 
@@ -198,7 +211,7 @@ def _to_ros_msg(msg_type,d):
 
 # zenoh转Ros
 class Zenoh2RosBridge(Node):
-    def __init__(self):
+    def __init__(self, hands=None):
         super().__init__("zenoh2ros_bridge")
 
         self._pending: Queue[tuple[Publisher, Any]] = Queue(maxsize=128) # 缓存队列
@@ -208,7 +221,7 @@ class Zenoh2RosBridge(Node):
         self._zenoh_pubs = []
         self._session = zenoh.open(zenoh_cf)
         # Zenoh 订阅 -> ROS 发布
-        for zenoh_key, ros_topic, msg_type in create_topics_list():
+        for zenoh_key, ros_topic, msg_type in create_topics_list(hands):
             ros_cls = ROS_MSG_TYPES[msg_type]
             pub = self.create_publisher(ros_cls, ros_topic, 10)
             sub = self._session.declare_subscriber(zenoh_key, self._make_cb(pub, msg_type))
@@ -277,17 +290,25 @@ class Zenoh2RosBridge(Node):
             pub.publish(msg) # 发布消息
 
 
-def main():
-
+def main(argv=None):
     global _running
     _running = True
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
+    parser = argparse.ArgumentParser(description="Zenoh → ROS2 bridge for io_exotrans2hand")
+    parser.add_argument(
+        "--hands",
+        nargs="*",
+        default=None,
+        help="手型名（如 Inspire_RH56F2）。省略时扫描 Zenoh，空则回退 Inspire_RH56F2",
+    )
+    args = parser.parse_args(argv)
+
     node = None
     try:
         rclpy.init()
-        node = Zenoh2RosBridge()
+        node = Zenoh2RosBridge(hands=args.hands)
         while _running and rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
@@ -300,7 +321,6 @@ def main():
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-        # os._exit(0)
 
 
 if __name__ == "__main__":

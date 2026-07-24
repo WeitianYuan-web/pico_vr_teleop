@@ -84,4 +84,10 @@ from io_bus_proto.io_bus_codec import proto_to_dict  # noqa: F401
 print("[zenoh2ros] imports ok (rclpy, zenoh, io_bus_codec)")
 PY
 
-exec "${PYTHON}" "${BRIDGE}" "$@"
+# 默认显式订阅 Inspire_RH56F2，避免扫描窗口未等到 tf_hand 时 hands=[]
+HANDS_ARGS=()
+if [[ $# -eq 0 ]]; then
+  HANDS_ARGS=(--hands "${IO_HANDS:-Inspire_RH56F2}")
+fi
+
+exec "${PYTHON}" "${BRIDGE}" "${HANDS_ARGS[@]}" "$@"

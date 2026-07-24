@@ -29,6 +29,7 @@ cmake --build build --target inspire_hand_py
   → ./scripts/run_io_gateway.sh          # third_party/io_exotrans2hand
   → Apply Inspire_RH56F2
   → ./scripts/run_io_zenoh2ros.sh        # Zenoh → /io_teleop/.../joint_cmd_finger_*
+                                         # 须在 gateway 应用手型后启动；脚本默认 --hands Inspire_RH56F2
   → ./scripts/run_io_hand_bridge.sh      # JointState → inspire_hand_py(rh56f2)
   → RH56F2 RS485
 

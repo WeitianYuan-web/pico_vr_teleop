@@ -17,6 +17,7 @@ serial_probe_fail_threshold: 2
 # 串口探测排除列表（灵巧手等非外骨骼 ACM/USB 口，永不 probe）
 probe_exclude_ports:
   - /dev/ttyUSB0
+  - /dev/ttyUSB1
 # 启动延迟，单位：秒
 startup_delay_sec: 2.0
 # 布局未变、exo 掉线后两次自动补启的最小间隔（秒）
