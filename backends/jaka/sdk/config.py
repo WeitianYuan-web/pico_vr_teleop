@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-# 机械臂 IP（与 tcp_ip/config.py 一致）
+# 机械臂 IP
 ROBOT_IP = "192.168.10.21"
 
 _SDK_ROOT = Path(__file__).resolve().parents[1] / (

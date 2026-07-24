@@ -37,7 +37,7 @@ from common.vr_input import is_button_pressed, rotation_enabled
 from common.ws_client import run_webxr_ws_loop
 from config import HOME_JOINT_DEG
 from jaka_sdk_client import ERR_NAMES, JakaSdkError, JakaSdkRobot
-from keyboard_teleop import format_pose, move_to_home, tracking_error
+from motion_utils import format_pose, move_to_home, tracking_error
 
 # JAKA 安装前向为 +Y
 R_HEADSET_TO_WORLD = HEADSET_TO_WORLD_Y_FORWARD

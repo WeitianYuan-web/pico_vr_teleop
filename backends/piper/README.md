@@ -1,6 +1,6 @@
 # backends/piper
 
-Piper 双臂（+ Inspire 手）遥操作后端。
+Piper 双臂（+ Inspire 手）WebXR 遥操作。
 
 ## 布局
 
@@ -12,12 +12,12 @@ backends/piper/
     └── dual_arm_dual_hand_webxr.py    # 双臂 + 双手（继承上一文件）
 ```
 
-## 依赖（`third_party/`）
+## 依赖
 
-| 路径 | 作用 |
-|------|------|
-| `third_party/pyAgxArm/` | Piper CAN SDK + Placo IK 实现 |
-| `third_party/InspireHandSDK_Y/` | 灵巧手 SDK |
+| 路径 | 随仓？ | 作用 |
+|------|--------|------|
+| `third_party/pyAgxArm/` | 是 | Piper CAN + Placo IK |
+| `third_party/InspireHandSDK_Y/` | 否 | 灵巧手（可选） |
 
 ## 启动
 

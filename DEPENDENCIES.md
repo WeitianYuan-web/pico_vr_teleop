@@ -25,7 +25,7 @@ source .venv/bin/activate
 
 | 组件 | 随仓？ | 操作 |
 |------|--------|------|
-| `backends/jaka/sdk` 等源码 | 是 | 拉代码即可 |
+| `backends/jaka/sdk` | 是 | 拉代码即可 |
 | `backends/jaka/20260104145805A007` | 否 | 从已配好机器拷贝整目录，见 [backends/jaka/README.md](backends/jaka/README.md) |
 
 ### G1
