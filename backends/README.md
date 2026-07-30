@@ -12,5 +12,8 @@
 | piper | `piper/teleop/` | Inspire（可选）→ `third_party/InspireHandSDK_Y/` |
 | jaka | `jaka/sdk/` | 厂商包 → `jaka/20260104145805A007/` |
 | g1 | `g1/` | `unitree_sdk2_python` + CycloneDDS |
+| tianyee | `tianyee/` | 机器人 XARM；UDP 桥见 `tianyee/README.md` |
 
 跨设备清单见 [DEPENDENCIES.md](../DEPENDENCIES.md)。
+
+IO 外骨骼 / VR 扳机控手（统一执行节点）：[controllers/io_hand/README.md](../controllers/io_hand/README.md)。

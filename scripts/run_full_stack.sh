@@ -34,12 +34,12 @@ usage() {
 
 一键启动:
   1) WebXR HTTPS/WSS 服务 (server.py)
-  2) 遥操作 (backend 可选 piper/jaka/g1)
+  2) 遥操作 (backend 可选 piper/jaka/g1/tianyee)
   3) ROS 发布节点 (teleop_realsense_publisher.py)
 
 选项:
   --no-can-activate     跳过 can0/can1 自动激活
-  --backend <name>      选择遥操作后端: piper | jaka | g1（默认 piper）
+  --backend <name>      选择遥操作后端: piper | jaka | g1 | tianyee（默认 piper）
   --no-vr-server        不启动 WebXR 服务
   --no-teleop           不启动遥操作
   --no-publisher        不启动 ROS 发布节点
@@ -55,8 +55,11 @@ usage() {
   $(basename "$0")
   $(basename "$0") --backend jaka
   $(basename "$0") --backend g1 -- --motion --network-interface enp12s0
-  $(basename "$0") -- --left-hand-port /dev/ttyUSB0 --right-hand-port /dev/ttyUSB1
+  $(basename "$0") --backend piper -- --disable-hands
+  $(basename "$0") --backend tianyee --no-can-activate --no-publisher
   ROS_ARGS="-p camera_f_serial:=xxxx" $(basename "$0")
+
+手串口由 ./scripts/run_hand_controller.sh 独占；Piper Trigger 默认只发 /hand_cmd。
 EOF
 }
 
@@ -102,8 +105,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" ]]; then
-  echo "[错误] --backend 仅支持 piper / jaka / g1，当前: ${BACKEND}"
+if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" && "${BACKEND}" != "tianyee" ]]; then
+  echo "[错误] --backend 仅支持 piper / jaka / g1 / tianyee，当前: ${BACKEND}"
   exit 1
 fi
 
@@ -290,10 +293,19 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/jaka_dual_webxr.py"
   elif [[ "${BACKEND}" == "g1" ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/g1_dual_webxr.py"
+  elif [[ "${BACKEND}" == "tianyee" ]]; then
+    TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/tianyee_dual_webxr.py"
   else
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/piper_dual_webxr.py"
   fi
   echo "[Launcher] 遥操作后端: ${BACKEND}"
+  if [[ "${BACKEND}" == "tianyee" ]]; then
+    echo "[Launcher] 天轶：先确保机器人 bridge 已启动: ./scripts/run_tianyee_udp_bridge.sh --prepare"
+    # 默认 UDP 参数，可被 TELEOP_ARGS 覆盖
+    if [[ ${#TELEOP_ARGS[@]} -eq 0 ]]; then
+      TELEOP_ARGS=(--transport udp --udp-host "${TIANYEE_UDP_HOST:-192.168.41.1}")
+    fi
+  fi
   echo "[Launcher] 启动遥操作（前台）: ${TELEOP_ENTRY} ${TELEOP_ARGS[*]:-}"
   echo "[Launcher] 状态默认上报 UDP 127.0.0.1:17981 -> publisher"
   echo "[Launcher] PICO 访问页面见 ${LOG_DIR}/vr_server.log 中的 HTTPS 地址"
@@ -312,6 +324,8 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
       if [[ -n "${UNITREE_SDK2_PYTHON:-}" && -d "${UNITREE_SDK2_PYTHON}" ]]; then
         export PYTHONPATH="${UNITREE_SDK2_PYTHON}:${PYTHONPATH:-}"
       fi
+    elif [[ "${BACKEND}" == "tianyee" ]]; then
+      export PYTHONPATH="${PROJECT_DIR}/backends/tianyee:${PYTHONPATH:-}"
     fi
     exec python "${TELEOP_ENTRY}" "${TELEOP_ARGS[@]}"
   )

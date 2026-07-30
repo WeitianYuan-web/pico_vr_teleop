@@ -11,10 +11,14 @@ from types import SimpleNamespace
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 TELEOP_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLISHER_DIR = os.path.join(PROJECT_ROOT, "publisher")
-INSPIRE_BUILD_PYTHON_DIR = os.path.join(PROJECT_ROOT, "third_party", "InspireHandSDK_Y", "build", "python")
+IO_HAND_DIR = os.path.join(PROJECT_ROOT, "controllers", "io_hand")
+INSPIRE_BUILD_PYTHON_DIR = os.path.join(
+    PROJECT_ROOT, "third_party", "InspireHandSDK_Y", "build", "python"
+)
 
 sys.path.insert(0, TELEOP_DIR)
 sys.path.insert(0, PUBLISHER_DIR)
+sys.path.insert(0, IO_HAND_DIR)
 
 from teleop_piper_webxr import (  # noqa: E402
     HANDS,
@@ -22,24 +26,22 @@ from teleop_piper_webxr import (  # noqa: E402
     resolve_arm_can_ports,
 )
 from teleop_state_bridge import hand_registers_to_radians  # noqa: E402
+from vr_trigger_cmd import (  # noqa: E402
+    DEFAULT_HAND_MODEL,
+    alpha_to_joint_state,
+    default_close_pose,
+    default_open_pose,
+    trigger_to_alpha,
+)
 
-
-HAND_MIN_POSITION = 0.05         # 扳机松开时的 alpha（0=全张, 1=全握）；应接近 0 才能默认张开
-HAND_MAX_POSITION = 0.6          # 扳机按满时的 alpha；0.6=握至约六成闭合，非全握
-# 各机型软限位最小角度（0.1° 寄存器），与 InspireHandSDK_Y profile::limits_.angle_min 一致
-HAND_FULL_CLOSE_BY_MODEL = {
-    "rh56f2": [900, 900, 900, 900, 1100, 500],
-    "f2": [900, 900, 900, 900, 1100, 500],
-    "rh56h1": [870, 870, 870, 870, 950, 700],
-    "h1": [870, 870, 870, 870, 950, 700],
-}
-DEFAULT_HAND_MODEL = "rh56f2"
-HAND_CMD_DEADBAND = 0.02         # 归一化位置变化小于该值则不下发
-HAND_CMD_MIN_INTERVAL_S = 0.05   # 手命令最小间隔
+HAND_MIN_POSITION = 0.05
+HAND_MAX_POSITION = 0.6
+HAND_CMD_DEADBAND = 0.02
+HAND_CMD_MIN_INTERVAL_S = 0.05
 
 
 class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
-    """双臂 + 双灵巧手 WebXR 遥操作（Trigger 线性控制张合）。"""
+    """双臂 WebXR；默认 Trigger 只发 /hand_cmd，由统一手控占串口。"""
 
     def __init__(
         self,
@@ -58,6 +60,8 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         hand_model: str = DEFAULT_HAND_MODEL,
         strict_hand_connect: bool = False,
         disable_hands: bool = False,
+        legacy_direct_hand: bool = False,
+        publish_hand_cmd: bool = True,
         publish_state: bool = True,
         state_udp_host: str = "127.0.0.1",
         state_udp_port: int = 17981,
@@ -71,7 +75,10 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
             state_publish_hz=state_publish_hz,
             **kwargs,
         )
+        # disable_hands：完全不发手指令（IO 手套控手时用）
         self.disable_hands = disable_hands
+        self.legacy_direct_hand = legacy_direct_hand and not disable_hands
+        self.publish_hand_cmd = publish_hand_cmd and not disable_hands and not self.legacy_direct_hand
         self.strict_hand_connect = strict_hand_connect
         self.hand_model = str(hand_model).strip().lower() or DEFAULT_HAND_MODEL
         self.hand_baudrate = hand_baudrate
@@ -83,8 +90,10 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         self.hand_io_hz = hand_io_hz
         self.hand_connect_retry = max(1, hand_connect_retry)
         self._ih = None
-        self._hand_open_pose: list[int] | None = None
-        self._hand_close_pose: list[int] | None = None
+        self._hand_open_pose: list[int] = default_open_pose(self.hand_model)
+        self._hand_close_pose: list[int] = default_close_pose(self.hand_model)
+        self._hand_cmd_node = None
+        self._hand_cmd_pubs = {}
         self.dex_hands = {
             "left": SimpleNamespace(
                 side="left",
@@ -107,8 +116,6 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         }
 
     def _load_inspire_binding(self):
-        if self.disable_hands:
-            return None
         if self._ih is not None:
             return self._ih
         if os.path.isdir(INSPIRE_BUILD_PYTHON_DIR):
@@ -125,58 +132,35 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         self._ih = ih
         return ih
 
-    def _resolve_hand_poses(self, ih) -> tuple[list[int], list[int]]:
-        """解析张开/全握姿态；按 --hand-model 选择。"""
+    def _resolve_hand_poses_from_sdk(self, ih) -> tuple[list[int], list[int]]:
         model = self.hand_model
         if hasattr(ih, "default_open_pose"):
             open_pose = list(ih.default_open_pose(model))
         elif hasattr(ih.Hand, "default_open_pose_for"):
             open_pose = list(ih.Hand.default_open_pose_for(model))
         else:
-            open_pose = list(ih.Hand.default_open_pose())
-            print(f"[Hand] 提示: 绑定无 model 感知 default_open_pose，使用默认机型姿态")
+            open_pose = default_open_pose(model)
 
         if hasattr(ih.Hand, "full_close_pose"):
             try:
                 close_pose = list(ih.Hand.full_close_pose())
             except TypeError:
-                close_pose = list(
-                    HAND_FULL_CLOSE_BY_MODEL.get(
-                        model, HAND_FULL_CLOSE_BY_MODEL[DEFAULT_HAND_MODEL]
-                    )
-                )
+                close_pose = default_close_pose(model)
         else:
-            close_pose = list(
-                HAND_FULL_CLOSE_BY_MODEL.get(
-                    model, HAND_FULL_CLOSE_BY_MODEL[DEFAULT_HAND_MODEL]
-                )
-            )
+            close_pose = default_close_pose(model)
         return open_pose, close_pose
 
     def _clear_agx_grippers(self) -> None:
-        """IO 控手或 --disable-hands 时禁止 Trigger 驱动 AGX 夹爪。"""
         for side in self.active_hands:
             arm = self.arms[side]
             if getattr(arm, "gripper", None) is not None:
                 arm.gripper = None
-                print(f"[Hand] 已禁用 AGX gripper（{side}），避免与 IO/Trigger 抢执行器")
+                print(f"[Hand] 已禁用 AGX gripper（{side}）")
 
     def _trigger_to_hand_alpha(self, trigger: float) -> float:
-        """
-        将扳机 [0,1] 线性映射到 [hand_min_position, hand_max_position]。
-
-        alpha 语义：0=全张姿态，1=全握姿态（见 _lerp_hand_pose）。
-        因此 hand_min_position 应接近 0（扳机松开≈张开），
-        hand_max_position 应接近 1（扳机按满≈握紧）。
-        """
-        t = max(0.0, min(float(trigger), 1.0))
-        lo = self.hand_min_position
-        hi = self.hand_max_position
-        return lo + t * (hi - lo)
+        return trigger_to_alpha(trigger, self.hand_min_position, self.hand_max_position)
 
     def _lerp_hand_pose(self, alpha: float) -> list[int]:
-        if self._hand_open_pose is None or self._hand_close_pose is None:
-            raise RuntimeError("灵巧手姿态未初始化")
         a = max(0.0, min(float(alpha), 1.0))
         return [
             int(self._hand_open_pose[i] + a * (self._hand_close_pose[i] - self._hand_open_pose[i]))
@@ -187,19 +171,80 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         if info.dev is None:
             return False
         pose = self._lerp_hand_pose(alpha)
-        return bool(
-            info.dev.submit_angles(pose, self.hand_force, self.hand_speed, True)
+        return bool(info.dev.submit_angles(pose, self.hand_force, self.hand_speed, True))
+
+    def _init_hand_cmd_publisher(self) -> None:
+        if not self.publish_hand_cmd:
+            return
+        try:
+            import rclpy
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from sensor_msgs.msg import JointState
+        except ImportError as exc:
+            raise RuntimeError(
+                "发布 /hand_cmd 需要 ROS2 rclpy；请 source /opt/ros/jazzy/setup.bash"
+            ) from exc
+
+        if not rclpy.ok():
+            rclpy.init(args=None)
+        qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
+        self._hand_cmd_node = rclpy.create_node("piper_hand_cmd_publisher")
+        self._JointState = JointState
+        for side in self.active_hands:
+            topic = f"/hand_cmd/{side}"
+            self._hand_cmd_pubs[side] = self._hand_cmd_node.create_publisher(
+                JointState, topic, qos
+            )
+            print(f"[Hand] Trigger → 发布 {topic}（统一手控执行）")
+
+    def _publish_hand_cmd_alpha(self, side: str, alpha: float) -> bool:
+        pub = self._hand_cmd_pubs.get(side)
+        if pub is None or self._hand_cmd_node is None:
+            return False
+        mapped = alpha_to_joint_state(
+            alpha,
+            side,
+            open_pose=self._hand_open_pose,
+            close_pose=self._hand_close_pose,
+            model=self.hand_model,
         )
+        if mapped is None:
+            return False
+        names, positions = mapped
+        msg = self._JointState()
+        msg.header.stamp = self._hand_cmd_node.get_clock().now().to_msg()
+        msg.name = names
+        msg.position = positions
+        pub.publish(msg)
+        return True
 
     def connect_dex_hands(self):
+        self._clear_agx_grippers()
         if self.disable_hands:
-            print("[Hand] 已禁用灵巧手控制（--disable-hands）；请用 IO 手桥控手")
-            self._clear_agx_grippers()
+            print("[Hand] --disable-hands / --no-hand-cmd：不发手指令（IO 手套控手）")
             return
+
+        if self.publish_hand_cmd:
+            try:
+                ih = self._load_inspire_binding()
+                self._hand_open_pose, self._hand_close_pose = self._resolve_hand_poses_from_sdk(ih)
+            except Exception as exc:
+                print(f"[Hand] 使用内置开合端点（未加载 SDK 姿态）: {exc}")
+            print(
+                f"[Hand] model={self.hand_model} 姿态端点: "
+                f"全张={self._hand_open_pose}, 全握={self._hand_close_pose}"
+            )
+            self._init_hand_cmd_publisher()
+            return
+
+        if not self.legacy_direct_hand:
+            return
+
+        # --legacy-direct-hand：本进程占串口（调试）
         ih = self._load_inspire_binding()
-        self._hand_open_pose, self._hand_close_pose = self._resolve_hand_poses(ih)
+        self._hand_open_pose, self._hand_close_pose = self._resolve_hand_poses_from_sdk(ih)
         print(
-            f"[Hand] model={self.hand_model} 姿态端点: "
+            f"[Hand] LEGACY 直连串口 model={self.hand_model} "
             f"全张={self._hand_open_pose}, 全握={self._hand_close_pose}"
         )
         for side in self.active_hands:
@@ -241,25 +286,21 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
                 if self._submit_hand_alpha(info, init_alpha):
                     info.last_cmd_alpha = init_alpha
                     info.last_cmd_time = time.time()
-                print(
-                    f"[Hand-{side}] 已连接，线性控制 "
-                    f"[{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]（扳机映射）"
-                )
+                print(f"[Hand-{side}] LEGACY 已连接")
                 break
             if info.connected:
                 continue
             err_msg = (
                 f"[Hand-{side}] 连接失败: port={info.port}, model={self.hand_model}, "
-                f"hand_id={info.hand_id}, baud={self.hand_baudrate}。建议先执行："
-                f"python {PROJECT_ROOT}/third_party/InspireHandSDK_Y/python/diagnose_hand.py "
-                f"{info.port} --hand-id {info.hand_id} --scan-id"
+                f"hand_id={info.hand_id}, baud={self.hand_baudrate}"
             )
             if self.strict_hand_connect:
                 raise RuntimeError(err_msg)
-            print(f"{err_msg}；已自动跳过该侧灵巧手，仅保留机械臂控制。")
+            print(f"{err_msg}；已跳过该侧。")
 
     def _collect_hand_state(self, side: str) -> dict | None:
-        if side not in self.active_hands or self.disable_hands:
+        # 解耦模式：真实状态由 rh56f2_controller 发 /puppet/hand_*；UDP 不报手
+        if not self.legacy_direct_hand or self.disable_hands:
             return None
         info = self.dex_hands[side]
         if not info.connected or info.dev is None:
@@ -277,6 +318,13 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         }
 
     def disconnect_dex_hands(self):
+        if self._hand_cmd_node is not None:
+            try:
+                self._hand_cmd_node.destroy_node()
+            except Exception:
+                pass
+            self._hand_cmd_node = None
+            self._hand_cmd_pubs.clear()
         for side in self.active_hands:
             info = self.dex_hands[side]
             if not info.connected or info.dev is None:
@@ -299,9 +347,9 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
             print(f"[Hand-{side}] 已断开")
 
     def _process_trigger_for_dex_hand(self, data: dict, side: str):
-        info = self.dex_hands[side]
-        if self.disable_hands or not info.connected or info.dev is None:
+        if self.disable_hands:
             return
+        info = self.dex_hands[side]
         ctrl = next((c for c in data.get("controllers", []) if c.get("handedness") == side), None)
         if ctrl is None:
             return
@@ -313,7 +361,14 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
                 return
         if now - info.last_cmd_time < HAND_CMD_MIN_INTERVAL_S:
             return
-        ok = self._submit_hand_alpha(info, target_alpha)
+
+        if self.publish_hand_cmd:
+            ok = self._publish_hand_cmd_alpha(side, target_alpha)
+        elif self.legacy_direct_hand and info.connected and info.dev is not None:
+            ok = self._submit_hand_alpha(info, target_alpha)
+        else:
+            return
+
         if ok:
             info.last_cmd_alpha = target_alpha
             info.last_cmd_time = now
@@ -325,18 +380,20 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
         self._process_trigger_for_dex_hand(data, hand)
 
     async def ws_loop(self):
+        mode = "发布 /hand_cmd"
+        if self.disable_hands:
+            mode = "关闭（IO/无手）"
+        elif self.legacy_direct_hand:
+            mode = "LEGACY 直连串口"
         print(
-            "[Hand] 控制规则：Trigger 线性映射 -> "
-            f"alpha [{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]"
-            "（松开≈全张, 按满≈六成握）"
+            f"[Hand] Trigger → {mode}；alpha "
+            f"[{self.hand_min_position:.2f}, {self.hand_max_position:.2f}]"
         )
         await super().ws_loop()
 
     def run(self):
         try:
             self.connect_robots()
-            if self.disable_hands:
-                self._clear_agx_grippers()
             self.connect_dex_hands()
             asyncio.run(self.ws_loop())
         except KeyboardInterrupt:
@@ -357,67 +414,69 @@ class DualArmDualHandWebXRTeleop(WebXRPiperPlacoTeleop):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="WebXR 双臂双手遥操作（Piper + Inspire）")
+    parser = argparse.ArgumentParser(
+        description="WebXR 双臂遥操作（Piper）；手默认经 /hand_cmd 由统一手控执行"
+    )
     parser.add_argument(
         "--hands",
         choices=("both", "left", "right"),
         default="both",
-        help="控制模式：both=双臂双手；left/right=单侧调试",
+        help="控制模式：both=双臂；left/right=单侧调试",
     )
     parser.add_argument("--left-can-port", default=None, help="左臂 CAN 端口，双臂默认 can0")
     parser.add_argument("--right-can-port", default=None, help="右臂 CAN 端口，双臂默认 can1")
-    parser.add_argument("--left-hand-port", default="/dev/ttyUSB0", help="左手串口")
-    parser.add_argument("--right-hand-port", default="/dev/ttyUSB1", help="右手串口")
-    parser.add_argument("--left-hand-id", type=int, default=1, help="左手 hand_id")
-    parser.add_argument("--right-hand-id", type=int, default=1, help="右手 hand_id")
+    parser.add_argument("--left-hand-port", default="/dev/ttyUSB0", help="LEGACY 左手串口")
+    parser.add_argument("--right-hand-port", default="/dev/ttyUSB1", help="LEGACY 右手串口")
+    parser.add_argument("--left-hand-id", type=int, default=1, help="LEGACY 左手 hand_id")
+    parser.add_argument("--right-hand-id", type=int, default=1, help="LEGACY 右手 hand_id")
     parser.add_argument(
         "--hand-model",
         default=DEFAULT_HAND_MODEL,
-        help="灵巧手机型（inspire_hand_py model，默认 rh56f2）",
+        help="灵巧手机型（默认 rh56f2）",
     )
-    parser.add_argument("--hand-baudrate", type=int, default=115200, help="灵巧手串口波特率")
-    parser.add_argument(
-        "--hand-force",
-        type=int,
-        default=6000,
-        help="灵巧手力参数（RH56F2 常用 6000）",
-    )
-    parser.add_argument(
-        "--hand-speed",
-        type=int,
-        default=4000,
-        help="灵巧手速度参数（RH56F2 常用 4000）",
-    )
-    parser.add_argument("--hand-connect-retry", type=int, default=3, help="灵巧手连接重试次数")
+    parser.add_argument("--hand-baudrate", type=int, default=115200, help="LEGACY 波特率")
+    parser.add_argument("--hand-force", type=int, default=6000, help="LEGACY 力参数")
+    parser.add_argument("--hand-speed", type=int, default=4000, help="LEGACY 速度参数")
+    parser.add_argument("--hand-connect-retry", type=int, default=3, help="LEGACY 连接重试")
     parser.add_argument(
         "--strict-hand-connect",
         action="store_true",
-        help="任一灵巧手连接失败即退出（默认跳过失败侧并继续双臂）",
+        help="LEGACY：任一灵巧手连接失败即退出",
     )
     parser.add_argument(
         "--hand-min-position",
         type=float,
         default=HAND_MIN_POSITION,
-        help="扳机松开时的 alpha（默认 0.05，0=全张；勿设大值否则默认会半握）",
+        help="扳机松开时的 alpha（默认 0.05）",
     )
     parser.add_argument(
         "--hand-max-position",
         type=float,
         default=HAND_MAX_POSITION,
-        help="扳机按满时的 alpha（默认 0.6，1=全握）",
+        help="扳机按满时的 alpha（默认 0.6）",
     )
-    parser.add_argument("--hand-control-hz", type=int, default=200, help="灵巧手控制线程频率")
-    parser.add_argument("--hand-io-hz", type=int, default=30, help="灵巧手 IO 线程频率")
+    parser.add_argument("--hand-control-hz", type=int, default=200, help="LEGACY 控制频率")
+    parser.add_argument("--hand-io-hz", type=int, default=30, help="LEGACY IO 频率")
     parser.add_argument(
         "--disable-hands",
         action="store_true",
-        help="仅控制双臂；与 IO 手桥共存时请开启（不占手串口）",
+        help="不发 /hand_cmd、不占串口（IO 手套控手时使用）",
+    )
+    parser.add_argument(
+        "--no-hand-cmd",
+        action="store_true",
+        help="同 --disable-hands",
+    )
+    parser.add_argument(
+        "--legacy-direct-hand",
+        action="store_true",
+        help="调试：本进程直接占手串口（不推荐；与统一手控冲突）",
     )
     parser.add_argument(
         "--publish-state",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="向 publisher 上报臂/手状态（UDP，默认开启）",
+        help="向 publisher 上报臂状态（UDP，默认开启；手状态由统一手控发）",
     )
     parser.add_argument("--state-udp-host", default="127.0.0.1", help="状态上报目标主机")
     parser.add_argument("--state-udp-port", type=int, default=17981, help="状态上报目标端口")
@@ -453,17 +512,22 @@ def main():
     left_can_port, right_can_port = resolve_arm_can_ports(
         active_hands, args.left_can_port, args.right_can_port
     )
+    disable_hands = bool(args.disable_hands or args.no_hand_cmd)
     if len(active_hands) == 2:
         print(f"[System] 双臂 CAN 映射: left={left_can_port}, right={right_can_port}")
-        if not args.disable_hands:
+        if disable_hands:
+            print("[System] 手指令关闭：请用 IO 手套 + ./scripts/run_hand_controller.sh")
+        elif args.legacy_direct_hand:
             print(
-                "[System] 双手串口映射: "
-                f"left={args.left_hand_port}(id={args.left_hand_id}), "
-                f"right={args.right_hand_port}(id={args.right_hand_id}), "
+                "[System] LEGACY 双手串口: "
+                f"left={args.left_hand_port}, right={args.right_hand_port}, "
                 f"model={args.hand_model}"
             )
         else:
-            print("[System] --disable-hands：臂由 VR 控制，手请用 ./scripts/run_io_hand_bridge.sh")
+            print(
+                "[System] 手：Trigger → /hand_cmd/* → 请另启 "
+                "./scripts/run_hand_controller.sh"
+            )
     teleop = DualArmDualHandWebXRTeleop(
         hands=active_hands,
         left_can_port=left_can_port,
@@ -487,7 +551,9 @@ def main():
         hand_io_hz=args.hand_io_hz,
         hand_connect_retry=args.hand_connect_retry,
         strict_hand_connect=args.strict_hand_connect,
-        disable_hands=args.disable_hands,
+        disable_hands=disable_hands,
+        legacy_direct_hand=args.legacy_direct_hand,
+        publish_hand_cmd=not disable_hands and not args.legacy_direct_hand,
         publish_state=args.publish_state,
         state_udp_host=args.state_udp_host,
         state_udp_port=args.state_udp_port,

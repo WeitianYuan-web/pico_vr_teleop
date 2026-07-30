@@ -48,8 +48,23 @@ pip install -e ./unitree_sdk2_python
 |------|--------|------|
 | `third_party/io_exotrans2hand/` | 否（含 ~740MB bundle） | `./scripts/sync_io_exotrans2hand.sh` |
 | `third_party/InspireHandSDK_Y` | 否 | 编译 Python 绑定；手桥默认 **RH56F2** |
+| `protobuf>=5.28`（Jazzy / Py3.12） | — | `.venv/bin/pip install 'protobuf>=5.28,<6'`（zenoh2ros 解码） |
 
-详见 [controllers/io_hand/README.md](controllers/io_hand/README.md)、[third_party/README.md](third_party/README.md)。
+联调步骤与排错：[controllers/io_hand/README.md](controllers/io_hand/README.md)、[third_party/README.md](third_party/README.md)。
+
+统一手控（占串口 + `/puppet/hand_*`）：
+
+```bash
+./scripts/run_hand_controller.sh
+ros2 topic hz /puppet/hand_right
+```
+
+自检（gateway + zenoh2ros 已起）：
+
+```bash
+ros2 topic hz /io_teleop/Inspire_RH56F2/joint_cmd_finger_right
+ls third_party/InspireHandSDK_Y/build/python/inspire_hand_py*.so
+```
 
 ## 快速自检
 

@@ -66,3 +66,30 @@ def map_named_positions_to_angles(
         angle_vals.append(angle_val)
 
     return angle_vals
+
+
+def angles_to_named_positions(
+    angles: Sequence[int],
+    joint_prefix: str,
+) -> Optional[Tuple[List[str], List[float]]]:
+    """6 路寄存器角度 → JointState 名/rad（供 /hand_cmd 发布，再经 map_named_positions_to_angles 还原）。"""
+    if len(angles) != len(FINGER_MAPPINGS):
+        return None
+    names: List[str] = []
+    positions: List[float] = []
+    for angle, mapping in zip(angles, FINGER_MAPPINGS):
+        span_a = mapping.actuator_at_rad_upper - mapping.actuator_at_rad_lower
+        if span_a == 0:
+            ratio = 0.0
+        else:
+            ratio = (float(angle) - mapping.actuator_at_rad_lower) / float(span_a)
+            ratio = max(0.0, min(1.0, ratio))
+        rad = mapping.rad_sum_lower + ratio * (mapping.rad_sum_upper - mapping.rad_sum_lower)
+        # 单关节后缀：整段 rad 放在第一个 joint 上
+        suffix = mapping.joint_suffixes[0]
+        names.append(f"{joint_prefix}{suffix}")
+        positions.append(rad)
+        for extra in mapping.joint_suffixes[1:]:
+            names.append(f"{joint_prefix}{extra}")
+            positions.append(0.0)
+    return names, positions

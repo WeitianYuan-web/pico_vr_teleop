@@ -337,6 +337,8 @@ class TeleopPublisherNode(Node):
         self.declare_parameter("publish_raw_image", True)
         self.declare_parameter("publish_compressed_image", False)
         self.declare_parameter("jpeg_quality", 80)
+        # 统一手控 rh56f2_controller 已发 /puppet/hand_* 时必须为 false，避免双写覆盖
+        self.declare_parameter("publish_hands_from_udp", False)
 
         self.camera_width = int(self.get_parameter("camera_width").value)
         self.camera_height = int(self.get_parameter("camera_height").value)
@@ -350,13 +352,23 @@ class TeleopPublisherNode(Node):
             self.get_parameter("publish_compressed_image").value
         )
         self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
+        self.publish_hands_from_udp = bool(
+            self.get_parameter("publish_hands_from_udp").value
+        )
 
         self.joint_left_pub = self.create_publisher(JointState, "/puppet/joint_left", SENSOR_QOS)
         self.joint_right_pub = self.create_publisher(JointState, "/puppet/joint_right", SENSOR_QOS)
         self.pose_left_pub = self.create_publisher(PoseStamped, "/puppet/end_pose_left", SENSOR_QOS)
         self.pose_right_pub = self.create_publisher(PoseStamped, "/puppet/end_pose_right", SENSOR_QOS)
-        self.hand_left_pub = self.create_publisher(JointState, "/puppet/hand_left", SENSOR_QOS)
-        self.hand_right_pub = self.create_publisher(JointState, "/puppet/hand_right", SENSOR_QOS)
+        self.hand_left_pub = None
+        self.hand_right_pub = None
+        if self.publish_hands_from_udp:
+            self.hand_left_pub = self.create_publisher(
+                JointState, "/puppet/hand_left", SENSOR_QOS
+            )
+            self.hand_right_pub = self.create_publisher(
+                JointState, "/puppet/hand_right", SENSOR_QOS
+            )
 
         self.arm_joint_names = [f"joint_{i}" for i in range(1, 7)]
         self.hand_joint_names = [f"finger_{i}" for i in range(1, 7)]
@@ -414,12 +426,17 @@ class TeleopPublisherNode(Node):
             img_modes.append(f"jpeg q={self.jpeg_quality}")
         if self.publish_raw_image:
             img_modes.append("raw rgb8")
+        hand_src = (
+            f"手状态来自 UDP"
+            if self.publish_hands_from_udp
+            else "手状态不由本节点发（见 rh56f2_controller /puppet/hand_*）"
+        )
         self.get_logger().info(
             f"teleop 发布者已启动：{camera_hint}；"
             f"图像目标 {self.camera_width}x{self.camera_height}@{self.camera_fps} "
             f"[{'|'.join(img_modes) or '无'}]；"
             f"状态 {self.placeholder_hz:.0f} Hz；"
-            f"臂/手 udp://{self.state_udp_host}:{self.state_udp_port}"
+            f"臂 udp://{self.state_udp_host}:{self.state_udp_port}；{hand_src}"
         )
 
     def _list_device_serials(self) -> List[str]:
@@ -569,12 +586,18 @@ class TeleopPublisherNode(Node):
         )
         self.pose_left_pub.publish(self._make_pose(stamp, "base_left", left_pose or None))
         self.pose_right_pub.publish(self._make_pose(stamp, "base_right", right_pose or None))
-        self.hand_left_pub.publish(
-            self._make_joint_state(stamp, "hand_left", self.hand_joint_names, left_hand_joints)
-        )
-        self.hand_right_pub.publish(
-            self._make_joint_state(stamp, "hand_right", self.hand_joint_names, right_hand_joints)
-        )
+        if self.hand_left_pub is not None:
+            self.hand_left_pub.publish(
+                self._make_joint_state(
+                    stamp, "hand_left", self.hand_joint_names, left_hand_joints
+                )
+            )
+        if self.hand_right_pub is not None:
+            self.hand_right_pub.publish(
+                self._make_joint_state(
+                    stamp, "hand_right", self.hand_joint_names, right_hand_joints
+                )
+            )
 
     def destroy_node(self) -> bool:
         try:

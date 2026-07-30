@@ -10,12 +10,21 @@ ROS2 发布者节点，发布以下话题：
 - `/puppet/joint_right` (`sensor_msgs/JointState`)
 - `/puppet/end_pose_left` (`geometry_msgs/PoseStamped`)
 - `/puppet/end_pose_right` (`geometry_msgs/PoseStamped`)
-- `/puppet/hand_left` (`sensor_msgs/JointState`)
-- `/puppet/hand_right` (`sensor_msgs/JointState`)
+- `/puppet/hand_left` (`sensor_msgs/JointState`) — 仅当 `publish_hands_from_udp:=true`（LEGACY）
+- `/puppet/hand_right` (`sensor_msgs/JointState`) — 同上
 
-其中 3 路相机话题发布 RealSense 实时彩色图像，每路相机使用独立采集线程发布；`/puppet/*` 话题默认监听本机 UDP `17981`，
-接收 `backends` 或 `webxr` 遥操作脚本上报的臂/手状态后发布真实数据。
-若超过 `state_stale_timeout_s` 未收到新数据，则发布零位占位。
+其中 3 路相机话题发布 RealSense 实时彩色图像，每路相机使用独立采集线程发布；`/puppet/joint_*` 与 `/puppet/end_pose_*` 默认监听本机 UDP `17981`，
+接收 `backends` 遥操作上报的臂状态后发布。
+
+**默认不解耦手状态**：`publish_hands_from_udp` 默认为 `false`。真实手状态由统一手控
+`./scripts/run_hand_controller.sh` 发布到 `/puppet/hand_*`。仅在 `--legacy-direct-hand` 且需
+publisher 从 UDP 接手时设：
+
+```bash
+ROS_ARGS="-p publish_hands_from_udp:=true" ./scripts/run_full_stack.sh --backend piper -- --legacy-direct-hand
+```
+
+若超过 `state_stale_timeout_s` 未收到新臂数据，则发布零位占位。
 
 ## 依赖
 
