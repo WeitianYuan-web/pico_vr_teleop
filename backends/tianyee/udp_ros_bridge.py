@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import sys
@@ -20,12 +21,26 @@ if _HERE not in sys.path:
 
 from config import (  # noqa: E402
     DEFAULT_FROM_FRAME,
+    DEFAULT_HOME_JOINT_DURATION_S,
     DEFAULT_TO_FRAME_LEFT,
     DEFAULT_TO_FRAME_RIGHT,
     DEFAULT_UDP_PORT,
+    HOME_Q_LEFT,
+    HOME_Q_RIGHT,
 )
 from ros_endpose import TianyiRosEndpose  # noqa: E402
 from udp_protocol import decode_pose_packet  # noqa: E402
+
+
+def _tf_reply(ros: TianyiRosEndpose) -> dict:
+    reply: dict = {"t": time.time(), "left": None, "right": None}
+    for side in ("left", "right"):
+        try:
+            pos, quat = ros.lookup_tcp(side)  # type: ignore[arg-type]
+            reply[side] = {"xyz": pos.tolist(), "quat_wxyz": quat.tolist()}
+        except Exception as exc:  # noqa: BLE001
+            reply[side] = {"error": str(exc)}
+    return reply
 
 
 def main() -> int:
@@ -68,21 +83,40 @@ def main() -> int:
                 print(f"[Bridge] bad packet: {exc}")
                 continue
 
-            if pkt.get("cmd") == "get_tf":
-                reply = {"t": time.time(), "left": None, "right": None}
-                for side in ("left", "right"):
-                    try:
-                        pos, quat = ros.lookup_tcp(side)
-                        reply[side] = {
-                            "xyz": pos.tolist(),
-                            "quat_wxyz": quat.tolist(),
-                        }
-                    except Exception as exc:  # noqa: BLE001
-                        reply[side] = {"error": str(exc)}
-                sock.sendto(
-                    __import__("json").dumps(reply, separators=(",", ":")).encode("utf-8"),
-                    addr,
-                )
+            cmd = pkt.get("cmd")
+            if cmd == "get_tf":
+                sock.sendto(json.dumps(_tf_reply(ros), separators=(",", ":")).encode("utf-8"), addr)
+                continue
+
+            if cmd == "go_home_joints":
+                duration = float(pkt.get("duration_s", DEFAULT_HOME_JOINT_DURATION_S))
+                q_left = pkt.get("q_left") or list(HOME_Q_LEFT)
+                q_right = pkt.get("q_right") or list(HOME_Q_RIGHT)
+                print(f"[Bridge] go_home_joints duration={duration:.1f}s (elbow-down ready)")
+                try:
+                    t0 = time.time()
+                    ros.move_joints_ready(
+                        q_left=q_left,
+                        q_right=q_right,
+                        duration_s=duration,
+                    )
+                    # 关节控制器占用硬件时，末端话题不会动臂；必须切回 endpose
+                    print("[Bridge] switch → endpose_single_arm_qp_*")
+                    ros.activate_endpose_controllers()
+                    # 显式 switch 后无需再等 auto_switch（该命令偶发长时间无响应）
+                    for _ in range(5):
+                        ros.spin_once(0.02)
+                    ros.hold_current_endpose(seconds=0.35)
+                    reply = _tf_reply(ros)
+                    reply["ok"] = True
+                    reply["cmd"] = "go_home_joints"
+                    reply["endpose_ready"] = True
+                    reply["elapsed_s"] = round(time.time() - t0, 2)
+                    print(f"[Bridge] go_home_joints done in {reply['elapsed_s']}s")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[Bridge] go_home_joints failed: {exc}")
+                    reply = {"ok": False, "error": str(exc), "cmd": "go_home_joints", "t": time.time()}
+                sock.sendto(json.dumps(reply, separators=(",", ":")).encode("utf-8"), addr)
                 continue
 
             for side in ("left", "right"):

@@ -14,7 +14,7 @@ pico_vr_teleop/
 ├── common/             # 共用数学 / clutch / 滤波 / WSS
 ├── controllers/io_hand/ # 统一 RH56F2 手控（唯一占串口）
 ├── publisher/          # ROS2 + UDP 臂状态 + RealSense
-├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand、tianyee_ros_*
+├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand、tianyee_ros_ws
 └── scripts/            # setup / 一键启动 / 手控包装 / 天轶桥
 ```
 
