@@ -234,6 +234,10 @@ class TianyeeControlTests(unittest.TestCase):
                 offset = 0.0 if side == "left" else 10.0
                 return [offset + float(i) for i in range(7)]
 
+            def arm_dq_snapshot(self, side: str) -> list[float]:
+                offset = 0.0 if side == "left" else 1.0
+                return [offset + 0.1 * float(i) for i in range(7)]
+
             def lookup_tcp(self, side: str) -> tuple[np.ndarray, np.ndarray]:
                 y = 0.2 if side == "left" else -0.2
                 return np.array([0.4, y, 0.5]), np.array([1.0, 0.0, 0.0, 0.0])
@@ -241,11 +245,13 @@ class TianyeeControlTests(unittest.TestCase):
         reply = _tf_reply(FakeStateRos())  # type: ignore[arg-type]
         self.assertEqual(len(reply["left"]["joints"]), 7)
         self.assertEqual(len(reply["right"]["joints"]), 7)
+        self.assertEqual(len(reply["left"]["joint_velocities"]), 7)
         side = DualTianyiVrTeleop._collection_side_from_reply(reply["left"])
         self.assertIsNotNone(side)
         assert side is not None
         self.assertTrue(side["arm_valid"])
         self.assertEqual(side["arm_joints"], [float(i) for i in range(7)])
+        self.assertEqual(side["arm_velocities"], [0.1 * float(i) for i in range(7)])
 
     def test_external_motion_drops_old_hold_and_reseeds_measured_tcp(self) -> None:
         ros = _FakeRos()

@@ -522,6 +522,7 @@ class TeleopPublisherNode(Node):
         frame_id: str,
         names: List[str],
         positions: Optional[List[float]] = None,
+        velocities: Optional[List[float]] = None,
     ) -> JointState:
         msg = JointState()
         msg.header.stamp = stamp_msg
@@ -529,7 +530,10 @@ class TeleopPublisherNode(Node):
         msg.name = names
         positions = normalize_arm_joints(positions, len(names))
         msg.position = [float(v) for v in positions]
-        msg.velocity = [0.0] * len(names)
+        if velocities is None:
+            msg.velocity = [0.0] * len(names)
+        else:
+            msg.velocity = normalize_arm_joints(velocities, len(names))
         msg.effort = [0.0] * len(names)
         return msg
 
@@ -562,30 +566,43 @@ class TeleopPublisherNode(Node):
 
     def _side_from_snapshot(
         self, side: SideTeleopState | None
-    ) -> tuple[dict[str, float], list[float], list[float]]:
+    ) -> tuple[dict[str, float], list[float], list[float], list[float] | None]:
         if side is None:
-            return {}, [], []
+            return {}, [], [], None
         arm_pose = side.end_pose if side.arm_valid else {}
         arm_joints = side.arm_joints if side.arm_valid else []
+        arm_velocities = side.arm_velocities if side.arm_valid else None
         hand_joints = side.hand_joints if side.hand_valid else []
-        return arm_pose, arm_joints, hand_joints
+        return arm_pose, arm_joints, hand_joints, arm_velocities
 
     def _on_state_timer(self) -> None:
         stamp = self.get_clock().now().to_msg()
         snapshot = self.state_receiver.get_latest()
 
-        left_pose, left_arm_joints, left_hand_joints = self._side_from_snapshot(
+        left_pose, left_arm_joints, left_hand_joints, left_arm_vels = self._side_from_snapshot(
             snapshot.left if snapshot else None
         )
-        right_pose, right_arm_joints, right_hand_joints = self._side_from_snapshot(
-            snapshot.right if snapshot else None
+        right_pose, right_arm_joints, right_hand_joints, right_arm_vels = (
+            self._side_from_snapshot(snapshot.right if snapshot else None)
         )
 
         self.joint_left_pub.publish(
-            self._make_joint_state(stamp, "base_left", self.arm_joint_names, left_arm_joints)
+            self._make_joint_state(
+                stamp,
+                "base_left",
+                self.arm_joint_names,
+                left_arm_joints,
+                left_arm_vels,
+            )
         )
         self.joint_right_pub.publish(
-            self._make_joint_state(stamp, "base_right", self.arm_joint_names, right_arm_joints)
+            self._make_joint_state(
+                stamp,
+                "base_right",
+                self.arm_joint_names,
+                right_arm_joints,
+                right_arm_vels,
+            )
         )
         self.pose_left_pub.publish(self._make_pose(stamp, "base_left", left_pose or None))
         self.pose_right_pub.publish(self._make_pose(stamp, "base_right", right_pose or None))

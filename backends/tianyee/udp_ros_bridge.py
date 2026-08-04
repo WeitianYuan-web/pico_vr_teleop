@@ -177,6 +177,7 @@ def _tf_reply(ros: TianyiRosEndpose) -> dict:
         side_reply: dict = {
             "joint_names": ros.arm_joint_names(side),  # type: ignore[arg-type]
             "joints": ros.arm_q_snapshot(side),  # type: ignore[arg-type]
+            "joint_velocities": ros.arm_dq_snapshot(side),  # type: ignore[arg-type]
         }
         try:
             pos, quat = ros.lookup_tcp(side)  # type: ignore[arg-type]

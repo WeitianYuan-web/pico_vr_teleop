@@ -104,6 +104,7 @@ class DualTianyiVrTeleop:
     udp_sock: socket.socket | None = None
     _latest_vr_data: dict | None = None
     _last_status_len: int = 0
+    _last_status_print_t: float = 0.0
     _homing: bool = False
     _home_button_pressed: bool = False
     _last_home_time: float = 0.0
@@ -223,12 +224,20 @@ class DualTianyiVrTeleop:
         if not isinstance(raw, dict):
             return None
         joints_raw = raw.get("joints")
+        vels_raw = raw.get("joint_velocities")
+        if vels_raw is None:
+            vels_raw = raw.get("joint_vels")
         xyz_raw = raw.get("xyz")
         quat_raw = raw.get("quat_wxyz")
         joints = (
             [float(v) for v in joints_raw]
             if isinstance(joints_raw, list) and len(joints_raw) == 7
             else []
+        )
+        velocities = (
+            [float(v) for v in vels_raw]
+            if isinstance(vels_raw, list) and len(vels_raw) == 7
+            else ([0.0] * 7 if len(joints) == 7 else [])
         )
         pose_ok = (
             isinstance(xyz_raw, list)
@@ -246,6 +255,7 @@ class DualTianyiVrTeleop:
             "arm_valid": len(joints) == 7 and pose_ok,
             "hand_valid": False,
             "arm_joints": joints,
+            "arm_velocities": velocities,
             "end_pose": pose,
             "hand_joints": [],
         }
@@ -976,6 +986,11 @@ class DualTianyiVrTeleop:
             await asyncio.sleep(max(0.0, dt - elapsed))
 
     def _print_status(self) -> None:
+        # IDE/日志终端对 \r 行刷新支持差；降到约 2Hz，避免控制环 50Hz 刷屏。
+        now = time.time()
+        if now - self._last_status_print_t < 0.5:
+            return
+        self._last_status_print_t = now
         parts = []
         for side in self.active_hands:
             st = self.sides[side]

@@ -69,6 +69,7 @@ class TianyiRosEndpose:
             ],
         }
         self._joint_pos: dict[str, float] = {}
+        self._joint_vel: dict[str, float] = {}
         self.node.create_subscription(JointState, "/joint_states", self._on_joint_state, 50)
         self._Float64MultiArray = Float64MultiArray
         self._Pose = Pose
@@ -91,8 +92,18 @@ class TianyiRosEndpose:
             self.node.get_logger().warn(f"SwitchController client unavailable: {exc}")
 
     def _on_joint_state(self, msg) -> None:  # noqa: ANN001
-        for name, pos in zip(msg.name, msg.position):
-            self._joint_pos[str(name)] = float(pos)
+        names = [str(n) for n in msg.name]
+        positions = [float(v) for v in msg.position]
+        velocities = [float(v) for v in getattr(msg, "velocity", [])]
+        for name, pos in zip(names, positions):
+            self._joint_pos[name] = pos
+        # Pass through robot-reported velocity only; missing/short arrays stay 0.
+        if len(velocities) == len(names) and len(names) > 0:
+            for name, vel in zip(names, velocities):
+                self._joint_vel[name] = vel
+        else:
+            for name in names:
+                self._joint_vel.setdefault(name, 0.0)
 
     def arm_joint_names(self, side: Side) -> list[str]:
         """Return the canonical seven-axis order used by Tianyee controllers."""
@@ -104,6 +115,13 @@ class TianyiRosEndpose:
         if not all(name in self._joint_pos for name in names):
             return None
         return [self._joint_pos[name] for name in names]
+
+    def arm_dq_snapshot(self, side: Side) -> list[float] | None:
+        """Return cached joint velocities (rad/s), matching arm_q_snapshot order."""
+        names = self._joint_names[side]
+        if not all(name in self._joint_pos for name in names):
+            return None
+        return [float(self._joint_vel.get(name, 0.0)) for name in names]
 
     def current_arm_q(self, side: Side, timeout_s: float = 2.0) -> list[float] | None:
         deadline = time.time() + timeout_s

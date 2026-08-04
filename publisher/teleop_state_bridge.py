@@ -22,6 +22,7 @@ class SideTeleopState:
     hand_joints: list[float]
     arm_valid: bool = False
     hand_valid: bool = False
+    arm_velocities: list[float] | None = None
 
 
 @dataclass
@@ -69,23 +70,31 @@ def decode_snapshot(data: bytes) -> TeleopStateSnapshot:
 def _side_to_dict(side: SideTeleopState | None) -> dict[str, Any] | None:
     if side is None:
         return None
-    return {
+    out: dict[str, Any] = {
         "arm_valid": side.arm_valid,
         "hand_valid": side.hand_valid,
         "arm_joints": side.arm_joints,
         "end_pose": side.end_pose,
         "hand_joints": side.hand_joints,
     }
+    if side.arm_velocities is not None:
+        out["arm_velocities"] = side.arm_velocities
+    return out
 
 
 def _side_from_dict(raw: dict[str, Any] | None) -> SideTeleopState | None:
     if not raw:
         return None
     pose = raw.get("end_pose") or {}
+    vels_raw = raw.get("arm_velocities")
+    arm_velocities = (
+        [float(v) for v in vels_raw] if isinstance(vels_raw, list) else None
+    )
     return SideTeleopState(
         arm_valid=bool(raw.get("arm_valid", False)),
         hand_valid=bool(raw.get("hand_valid", False)),
         arm_joints=[float(v) for v in raw.get("arm_joints", [])],
+        arm_velocities=arm_velocities,
         end_pose={
             "x": float(pose.get("x", 0.0)),
             "y": float(pose.get("y", 0.0)),

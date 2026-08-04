@@ -89,10 +89,15 @@ ssh ubuntu@192.168.41.1 'systemctl status tianyee_udp_bridge; cat ~/pico_vr_tele
 本机采集 publisher 只使用标准 ROS2 消息，不需要天轶自定义消息包。
 天轶运维脚本在 `backends/tianyee/scripts/`（`scripts/run_tianyee_*.sh` 为薄入口）。
 
-机器人 bridge 的只读 `get_state` 会把 `/joint_states` 中左右臂各 7 个真实关节角和
-TCP 位姿传回本机；遥操作使用独立 UDP 状态线程转发到 `127.0.0.1:17981`，publisher
-再发布 `/puppet/joint_left|right` 与 `/puppet/end_pose_left|right`。状态轮询不暂停
-控制 watchdog，也不进入机器人 DDS 网络。
+机器人 bridge 的只读 `get_state` 会把 `/joint_states` 中左右臂各 7 个真实关节角、
+关节速度（机器人未提供则保持 0，不做差分估算）和 TCP 位姿传回本机；遥操作使用独立
+UDP 状态线程转发到 `127.0.0.1:17981`，publisher 再发布 `/puppet/joint_left|right`
+（含 `velocity`）与 `/puppet/end_pose_left|right`。状态轮询不暂停控制 watchdog，
+也不进入机器人 DDS 网络。更新速度字段后需重装/重启机器人 bridge：
+
+```bash
+./scripts/run_tianyee_bridge_install.sh
+```
 
 ### 2) 本机：WebXR + 遥操作
 
