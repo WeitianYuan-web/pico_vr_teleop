@@ -16,6 +16,7 @@ from typing import Deque, Optional
 # 与 publisher 使用同一 Fast DDS profile（大 SHM + 保留内置发现）。
 PUBLISHER_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROFILE = os.path.join(PUBLISHER_DIR, "fastdds_local_image.xml")
+os.environ.setdefault("ROS_DOMAIN_ID", "42")
 os.environ.setdefault("FASTRTPS_DEFAULT_PROFILES_FILE", _PROFILE)
 os.environ.setdefault("FASTDDS_DEFAULT_PROFILES_FILE", _PROFILE)
 

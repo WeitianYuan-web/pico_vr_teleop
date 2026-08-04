@@ -9,8 +9,10 @@ VENV_ACTIVATE="${VENV_DIR}/bin/activate"
 WEBXR_DIR="${PROJECT_DIR}/webxr"
 LOG_DIR="${PROJECT_DIR}/logs"
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
-TIANYEE_ROS_ISOLATION="${TIANYEE_ROS_ISOLATION:-1}"
-TIANYEE_LOCAL_ROS_DOMAIN_ID="${TIANYEE_LOCAL_ROS_DOMAIN_ID:-42}"
+# 本机 ROS 默认 Domain 42，避免与机上/实验室常见 Domain 0 串网。
+# 兼容旧变量名 TIANYEE_*。
+LOCAL_ROS_DOMAIN_ID="${LOCAL_ROS_DOMAIN_ID:-${TIANYEE_LOCAL_ROS_DOMAIN_ID:-42}}"
+LOCAL_ROS_ISOLATION="${LOCAL_ROS_ISOLATION:-${TIANYEE_ROS_ISOLATION:-1}}"
 
 DO_CAN_ACTIVATE=1
 DO_VR_SERVER=1
@@ -52,9 +54,10 @@ usage() {
   ROS_SETUP             ROS setup.bash 路径（默认自动探测）
   CAN_BITRATE           CAN 波特率（默认 1000000）
   ROS_ARGS              传给 publisher 的 ros-args 字符串
-  TIANYEE_ROS_ISOLATION 天轶本机 ROS 隔离；1=开启（默认），0=关闭
-  TIANYEE_LOCAL_ROS_DOMAIN_ID
-                        天轶本机 ROS Domain（默认 42；机器人为 0）
+  LOCAL_ROS_DOMAIN_ID   本机 ROS Domain（默认 42）
+  LOCAL_ROS_ISOLATION   本机 ROS 隔离；1=开启并设置 Domain（默认），0=关闭
+  TIANYEE_ROS_ISOLATION / TIANYEE_LOCAL_ROS_DOMAIN_ID
+                        兼容旧名，等价于上面两项
 
 示例:
   $(basename "$0")
@@ -132,13 +135,14 @@ activate_runtime_env() {
   # shellcheck disable=SC1091
   source "${VENV_ACTIVATE}"
   local fastdds_xml
-  if [[ "${BACKEND}" == "tianyee" && "${TIANYEE_ROS_ISOLATION}" == "1" ]]; then
-    # 天轶控制使用 UDP bridge，本机 ROS 无需进入机器人 Domain 0。
-    # 独立 Domain + loopback/SHM 双重隔离，避免 DDS discovery/图消息到达机器人。
-    export ROS_DOMAIN_ID="${TIANYEE_LOCAL_ROS_DOMAIN_ID}"
+  if [[ "${LOCAL_ROS_ISOLATION}" == "1" ]]; then
+    export ROS_DOMAIN_ID="${LOCAL_ROS_DOMAIN_ID}"
+  fi
+  if [[ "${BACKEND}" == "tianyee" && "${LOCAL_ROS_ISOLATION}" == "1" ]]; then
+    # 天轶臂控走 UDP；本机 DDS 再加 loopback/SHM，避免扫到机器人 Domain 0。
     fastdds_xml="${PROJECT_DIR}/publisher/fastdds_local_only.xml"
   else
-    # 其他后端维持原行为：大图优先走 SHM，同时保留内置传输。
+    # 其他后端：Domain 隔离 + 大图 SHM，仍保留内置传输方便本机 ros2 CLI。
     fastdds_xml="${PROJECT_DIR}/publisher/fastdds_local_image.xml"
   fi
   if [[ -f "${fastdds_xml}" ]]; then
@@ -265,8 +269,12 @@ echo "============================================================"
 echo "[Launcher] 项目目录: ${PROJECT_DIR}"
 echo "[Launcher] 虚拟环境: ${VENV_DIR}"
 echo "[Launcher] 运行时: source ROS + source .venv/bin/activate"
-if [[ "${BACKEND}" == "tianyee" && "${TIANYEE_ROS_ISOLATION}" == "1" ]]; then
-  echo "[Launcher] 天轶本机 ROS 隔离: Domain ${TIANYEE_LOCAL_ROS_DOMAIN_ID} + loopback/SHM（机器人 Domain 0）"
+if [[ "${LOCAL_ROS_ISOLATION}" == "1" ]]; then
+  if [[ "${BACKEND}" == "tianyee" ]]; then
+    echo "[Launcher] 本机 ROS 隔离: Domain ${LOCAL_ROS_DOMAIN_ID} + loopback/SHM（机器人 Domain 0）"
+  else
+    echo "[Launcher] 本机 ROS Domain ${LOCAL_ROS_DOMAIN_ID}（与常见机上 Domain 0 隔离）"
+  fi
 fi
 
 activate_can_ports

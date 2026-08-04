@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Tianyee local-only ROS profile.
+  Local-only ROS profile (used by tianyee full-stack).
 
   Arm control uses the UDP bridge, so local publishers do not need DDS access
   to the robot.  Disable builtin transports and expose only loopback UDP plus
-  shared memory.  ROS_DOMAIN_ID is set separately by run_full_stack.sh.
+  shared memory.  ROS_DOMAIN_ID (default 42) is set separately by run_full_stack.sh.
 -->
 <dds>
   <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">

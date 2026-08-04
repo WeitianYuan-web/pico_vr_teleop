@@ -69,12 +69,16 @@ else
 fi
 set -u
 
+# 与一键启动一致：本机默认 Domain 42
+export ROS_DOMAIN_ID="${LOCAL_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-42}}"
+
 export PYTHONPATH="${IO_ROOT}/src:${IO_ROOT}/src/io_bus_proto/generated/python:${PYTHONPATH:-}:${ZENOH_LINK_DIR}"
 export LD_LIBRARY_PATH="${IO_ROOT}/bundle/opt/zenoh/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 echo "[zenoh2ros] ROOT=${IO_ROOT}"
 echo "[zenoh2ros] PYTHON=${PYTHON} (${PY_VER})"
 echo "[zenoh2ros] ROS_DISTRO=${ROS_DISTRO:-unknown}"
+echo "[zenoh2ros] ROS_DOMAIN_ID=${ROS_DOMAIN_ID}"
 
 # 快速自检，失败信息更友好
 "${PYTHON}" - <<'PY'

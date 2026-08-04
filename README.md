@@ -39,10 +39,10 @@ source .venv/bin/activate
 ./scripts/run_full_stack.sh --backend tianyee
 ```
 
-Tianyee 模式默认把本机 ROS 放在 Domain 42，并只启用 loopback/SHM；机器人继续使用
-Domain 0。机械臂命令走 UDP bridge，因此开启本机 publisher 也不会加入机器人 ROS 图。
-可用 `TIANYEE_LOCAL_ROS_DOMAIN_ID` 修改本机 Domain；仅在明确需要 ROS 直连调试时设置
-`TIANYEE_ROS_ISOLATION=0`。
+Tianyee 与其它后端一键启动时，本机 ROS 默认都在 **Domain 42**（`LOCAL_ROS_DOMAIN_ID`），
+避免与机上/实验室常见 Domain 0 串网。天轶额外使用 loopback/SHM Fast DDS 配置。
+可用 `LOCAL_ROS_DOMAIN_ID` 修改；仅在明确需要进 Domain 0 时设 `LOCAL_ROS_ISOLATION=0`。
+旧变量名 `TIANYEE_LOCAL_ROS_DOMAIN_ID` / `TIANYEE_ROS_ISOLATION` 仍可用。
 
 天轶机器人侧建议先持久安装 UDP 桥（开机自启 + 状态监控）：
 

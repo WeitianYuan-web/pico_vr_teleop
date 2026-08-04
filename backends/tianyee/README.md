@@ -14,10 +14,10 @@ PICO → webxr/server.py (WSS)
      → /endposetarget_L|R → endpose QP 控制器
 ```
 
-`run_full_stack.sh --backend tianyee` 还会把本机 ROS 默认隔离到 Domain 42，Fast DDS
-仅使用 loopback/SHM；机器人保持 Domain 0。本机 publisher 从 `127.0.0.1:17981`
+`run_full_stack.sh` 会把本机 ROS 默认放到 **Domain 42**（所有后端通用）；天轶再额外
+使用 loopback/SHM Fast DDS，机器人保持 Domain 0。本机 publisher 从 `127.0.0.1:17981`
 接收遥操作状态，不需要进入机器人 ROS 图。需要临时关闭隔离时显式设置
-`TIANYEE_ROS_ISOLATION=0`。
+`LOCAL_ROS_ISOLATION=0`（旧名 `TIANYEE_ROS_ISOLATION=0` 仍可用）。
 
 | 操作 | 说明 |
 |------|------|

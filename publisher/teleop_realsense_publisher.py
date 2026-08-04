@@ -13,9 +13,11 @@ from typing import Dict, List, Optional
 import numpy as np
 
 # ROS2 topic 名称、类型和 QoS 均不变。
+# 本机默认 Domain 42，避免与机上/实验室常见 Domain 0 串网。
 # fastdds_local_image.xml：保留内置传输（兼容 ros2 CLI 发现），
 # 另加足够大的 SHM segment，同机大图走共享内存。
 PUBLISHER_DIR = os.path.dirname(os.path.abspath(__file__))
+os.environ.setdefault("ROS_DOMAIN_ID", "42")
 os.environ.setdefault(
     "FASTRTPS_DEFAULT_PROFILES_FILE",
     os.path.join(PUBLISHER_DIR, "fastdds_local_image.xml"),

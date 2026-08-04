@@ -24,6 +24,9 @@ else
 fi
 set -u
 
+# 与一键启动一致：本机默认 Domain 42
+export ROS_DOMAIN_ID="${LOCAL_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-42}}"
+
 if [[ -f "${VENV_ACTIVATE}" ]]; then
   # shellcheck disable=SC1091
   source "${VENV_ACTIVATE}"

@@ -1,5 +1,12 @@
 # teleop_realsense_publisher
 
+本机默认 `ROS_DOMAIN_ID=42`（与 `run_full_stack.sh` / 手控一致）。查看话题时请：
+
+```bash
+export ROS_DOMAIN_ID=42
+ros2 topic list
+```
+
 ROS2 发布者节点，发布以下话题：
 
 - `/camera_f/color/image_raw` (`sensor_msgs/Image`, `rgb8`) **默认**
