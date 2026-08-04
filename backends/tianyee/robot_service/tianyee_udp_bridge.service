@@ -1,0 +1,33 @@
+[Unit]
+Description=Tianyi UDP→ROS endpose teleop bridge + arm status monitor
+After=network-online.target proc_manager.service tianyee_xarm.service
+Wants=network-online.target tianyee_xarm.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/pico_vr_teleop_tianyee
+Environment=TIANYEE_BRIDGE_HOME=/home/ubuntu/pico_vr_teleop_tianyee
+Environment=TIANYEE_BRIDGE_LOG=/home/ubuntu/pico_vr_teleop_tianyee/logs
+Environment=TIANYEE_BRIDGE_STATUS=/home/ubuntu/pico_vr_teleop_tianyee/status.json
+Environment=TIANYEE_UDP_PORT=19011
+Environment=TIANYEE_WAIT_ENABLE_S=300
+Environment=TIANYEE_WAIT_ARM_OK_S=120
+# Keep 0 so boot does not call set_arm_enable/mode during official self-check
+Environment=TIANYEE_BRIDGE_PREPARE=0
+ExecStart=/home/ubuntu/pico_vr_teleop_tianyee/robot_service/run_bridge.sh
+# ros2 CLI may spawn a daemon child; force cgroup teardown on stop/restart
+KillMode=control-group
+TimeoutStopSec=8
+FinalKillSignal=SIGKILL
+Restart=on-failure
+RestartSec=8
+# Do NOT set a low MemoryMax: FastDDS + rclpy easily uses >1GB; hitting the
+# cgroup limit freezes the process in D-state so UDP listens but never replies.
+TimeoutStopSec=15
+StandardOutput=append:/home/ubuntu/pico_vr_teleop_tianyee/logs/bridge.service.log
+StandardError=append:/home/ubuntu/pico_vr_teleop_tianyee/logs/bridge.service.log
+
+[Install]
+WantedBy=multi-user.target

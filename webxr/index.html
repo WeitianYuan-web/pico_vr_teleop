@@ -79,13 +79,23 @@
         .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.3); margin: 2px; font-size: 11px; }
         .badge.on { background: #4CAF50; color: #fff; }
     </style>
-    <!-- 使用 Import Map 引入现代版 Three.js -->
+    <!-- 本地托管 Three.js，避免头显无外网时卡在「初始化中」 -->
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+                "three": "./vendor/three.module.js"
             }
         }
+    </script>
+    <script>
+        // 模块脚本失败时不会更新 #status；这里做超时提示
+        window.__xrBootAt = Date.now();
+        setTimeout(() => {
+            const el = document.getElementById('status');
+            if (el && el.innerText === '初始化中...') {
+                el.innerText = '脚本加载超时：请确认可访问 ./vendor/three.module.js，并强制刷新页面';
+            }
+        }, 8000);
     </script>
 </head>
 <body>
@@ -141,9 +151,13 @@
         import * as THREE from 'three';
 
         // 1. WebSocket 网络通信模块
-        const ws = new WebSocket('wss://' + window.location.hostname + ':8081');
         const statusEl = document.getElementById('status');
-        
+        statusEl.innerText = "Three.js 已加载，正在连接 WebSocket...";
+
+        const wsHost = window.location.hostname || 'localhost';
+        const wsUrl = 'wss://' + wsHost + ':8081';
+        const ws = new WebSocket(wsUrl);
+
         let sendEnabled = true;
         let seq = 0, frameCount = 0, fpsCounter = 0;
         let lastFpsTime = performance.now();
@@ -152,9 +166,24 @@
         const SEND_INTERVAL = 1000 / TARGET_FPS;
         const f3 = (val) => Math.round(val * 1000) / 1000;
 
-        ws.onopen = () => { statusEl.innerText = "WebSocket 已连接，请点击进入透视 AR"; };
-        ws.onclose = () => { statusEl.innerText = "WebSocket 已断开"; };
-        ws.onerror = () => { statusEl.innerText = "WebSocket 错误，请检查 PC 端服务是否启动"; };
+        const wsTimer = setTimeout(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+                statusEl.innerText = `WebSocket 连接超时: ${wsUrl}（检查 PC:8081 与头显是否同网段）`;
+            }
+        }, 5000);
+
+        ws.onopen = () => {
+            clearTimeout(wsTimer);
+            statusEl.innerText = "WebSocket 已连接，请点击进入透视 AR";
+        };
+        ws.onclose = () => {
+            clearTimeout(wsTimer);
+            statusEl.innerText = "WebSocket 已断开";
+        };
+        ws.onerror = () => {
+            clearTimeout(wsTimer);
+            statusEl.innerText = `WebSocket 错误: ${wsUrl}，请检查 PC 端服务是否启动`;
+        };
 
         // 2. Three.js 场景搭建模块
         const canvas = document.getElementById('xr-canvas');

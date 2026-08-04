@@ -9,6 +9,7 @@ import sys
 import ssl
 import socket
 import time
+from pathlib import Path
 
 # 切换到脚本所在目录以便正确伺服 index.html
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -16,21 +17,83 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # 保存所有已连接的 WebSocket 客户端 (PICO 生产者 + 可视化消费者)
 CONNECTED_CLIENTS = set()
 
+
+def _iface_ipv4(iface: str) -> str | None:
+    """Return first non-loopback IPv4 on iface, or None."""
+    try:
+        import fcntl
+        import struct
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            packed = fcntl.ioctl(
+                sock.fileno(),
+                0x8915,  # SIOCGIFADDR
+                struct.pack("256s", iface[:15].encode("utf-8")),
+            )
+            return socket.inet_ntoa(packed[20:24])
+        finally:
+            sock.close()
+    except OSError:
+        return None
+
+
+def list_ipv4_candidates() -> list[tuple[str, str, bool]]:
+    """[(iface, ip, is_wireless), ...] for UP interfaces with IPv4."""
+    net = Path("/sys/class/net")
+    out: list[tuple[str, str, bool]] = []
+    if not net.is_dir():
+        return out
+    for iface_path in sorted(net.iterdir()):
+        iface = iface_path.name
+        if iface == "lo":
+            continue
+        try:
+            state = (iface_path / "operstate").read_text().strip()
+        except OSError:
+            continue
+        if state not in ("up", "unknown"):
+            continue
+        ip = _iface_ipv4(iface)
+        if not ip or ip.startswith("127."):
+            continue
+        is_wifi = (iface_path / "wireless").exists()
+        out.append((iface, ip, is_wifi))
+    return out
+
+
 def get_local_ip():
     """
-    /**
-     * @brief 获取本机的局域网 IP 地址
-     */
+    Prefer Wi-Fi for the PICO URL (headset is on WLAN).
+    Override with WEBXR_HOST_IP / WEBXR_IFACE if needed.
     """
+    override = os.environ.get("WEBXR_HOST_IP", "").strip()
+    if override:
+        return override
+
+    prefer_iface = os.environ.get("WEBXR_IFACE", "").strip()
+    candidates = list_ipv4_candidates()
+
+    if prefer_iface:
+        for iface, ip, _ in candidates:
+            if iface == prefer_iface:
+                return ip
+
+    for iface, ip, is_wifi in candidates:
+        if is_wifi:
+            return ip
+
+    # Fallback: route-based guess (may pick robot ethernet)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(('10.255.255.255', 1))
-        ip = s.getsockname()[0]
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
     except Exception:
-        ip = '127.0.0.1'
+        if candidates:
+            return candidates[0][1]
+        return "127.0.0.1"
     finally:
         s.close()
-    return ip
 
 def make_ssl_context():
     """
@@ -58,9 +121,14 @@ def start_http_server():
             httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
             ip = get_local_ip()
             print(f"[HTTP] 前端网页服务已启动！")
-            print(f"[HTTP] PICO 头显访问 (采集端): https://{ip}:{PORT}/index.html")
+            print(f"[HTTP] PICO 头显访问 (采集端 / 优先无线): https://{ip}:{PORT}/index.html")
+            for iface, cand_ip, is_wifi in list_ipv4_candidates():
+                tag = "wifi" if is_wifi else "wired"
+                mark = " <- 使用中" if cand_ip == ip else ""
+                print(f"[HTTP]   {iface} ({tag}): https://{cand_ip}:{PORT}/index.html{mark}")
             print(f"[HTTP] 本机浏览器访问 (可视化端): https://localhost:{PORT}/viz.html")
             print(f"[HTTP] (自签名证书会有安全警告，需点击「高级」->「继续访问」)")
+            print(f"[HTTP] 可覆盖: WEBXR_HOST_IP=x.x.x.x 或 WEBXR_IFACE=wlp18s0")
             httpd.serve_forever()
     except OSError:
         print(f"\n[HTTP 错误] 端口 {PORT} 无法绑定，请检查占用情况。")

@@ -14,7 +14,9 @@ import pexpect
 DEFAULT_HOST = os.environ.get("TIANYEE_HOST", "192.168.41.1")
 DEFAULT_USER = os.environ.get("TIANYEE_USER", "ubuntu")
 DEFAULT_PASS = os.environ.get("TIANYEE_SSH_PASS", "123")
-REMOTE_DIR = "/tmp/pico_vr_teleop_tianyee"
+# Persistent install path (prefer). Temporary path kept for one-shot debug.
+REMOTE_DIR = os.environ.get("TIANYEE_BRIDGE_HOME", "/home/ubuntu/pico_vr_teleop_tianyee")
+FALLBACK_TMP_DIR = "/tmp/pico_vr_teleop_tianyee"
 
 
 def _ssh(host: str, password: str, cmd: str, timeout: int = 60) -> str:
@@ -53,7 +55,7 @@ def main() -> int:
     p.add_argument("--password", default=DEFAULT_PASS)
     args = p.parse_args()
 
-    project = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    project = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
     target = f"{args.user}@{args.host}"
     prepare_flag = "--prepare" if args.prepare else ""
 
@@ -69,28 +71,67 @@ def main() -> int:
         f"""\
         #!/usr/bin/env bash
         set +u
+        # Prefer persistent systemd service if installed
+        if systemctl list-unit-files 2>/dev/null | grep -q '^tianyee_udp_bridge.service'; then
+          echo "[tianyee-bridge] restart systemd tianyee_udp_bridge.service"
+          echo {args.password} | sudo -S systemctl restart tianyee_udp_bridge.service
+          for i in $(seq 1 40); do
+            if [[ -f {REMOTE_DIR}/status.json ]] || \\
+               grep -q "listening udp" {REMOTE_DIR}/logs/bridge.service.log 2>/dev/null; then
+              systemctl --no-pager --full status tianyee_udp_bridge.service | head -25 || true
+              echo BRIDGE_READY=1
+              exit 0
+            fi
+            sleep 1
+          done
+          systemctl --no-pager --full status tianyee_udp_bridge.service | head -40 || true
+          tail -n 40 {REMOTE_DIR}/logs/bridge.service.log 2>/dev/null || true
+          echo BRIDGE_READY=0
+          exit 21
+        fi
+
         export ROS_HOME=/tmp/xarm_run/ros_home
-        mkdir -p "$ROS_HOME" /tmp/xarm_run
+        mkdir -p "$ROS_HOME" /tmp/xarm_run {REMOTE_DIR}/logs
         source /opt/ros/humble/setup.bash
         source /home/ubuntu/ros2ws/install/setup.bash
         source /home/ubuntu/XARM/install/setup.bash
         export FASTRTPS_DEFAULT_PROFILES_FILE=/home/ubuntu/data/param/dds_profile.xml
         export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
         export PYTHONPATH={REMOTE_DIR}/backends/tianyee:{REMOTE_DIR}:{REMOTE_DIR}/common:${{PYTHONPATH:-}}
+        if [[ -n "{prepare_flag}" ]]; then
+          if ! timeout 5 ros2 service list 2>/dev/null | grep -qx '/EAIHardware/set_arm_enable'; then
+            echo "[tianyee-bridge] ERROR: /EAIHardware/set_arm_enable unavailable"
+            echo "[tianyee-bridge] Run ./scripts/run_tianyee_robot_stack.sh first"
+            echo "[tianyee-bridge] Or install autostart: ./scripts/run_tianyee_bridge_install.sh"
+            exit 20
+          fi
+        fi
         pkill -f udp_ros_bridge.py 2>/dev/null || true
         sleep 0.5
         export PYTHONUNBUFFERED=1
         nohup python3 {REMOTE_DIR}/backends/tianyee/udp_ros_bridge.py {prepare_flag} \\
-          > /tmp/xarm_run/udp_bridge.log 2>&1 &
-        echo BRIDGE_PID=$!
-        # prepare(enable/mode) may take several seconds before UDP bind
+          --status-file {REMOTE_DIR}/status.json \\
+          > {REMOTE_DIR}/logs/udp_bridge.log 2>&1 &
+        bridge_pid=$!
+        echo BRIDGE_PID=$bridge_pid
+        bridge_ready=0
         for i in $(seq 1 30); do
-          if grep -q "listening udp" /tmp/xarm_run/udp_bridge.log 2>/dev/null; then
+          if grep -q "listening udp" {REMOTE_DIR}/logs/udp_bridge.log 2>/dev/null; then
+            bridge_ready=1
+            break
+          fi
+          if ! kill -0 "$bridge_pid" 2>/dev/null; then
             break
           fi
           sleep 0.5
         done
-        tail -n 40 /tmp/xarm_run/udp_bridge.log || true
+        tail -n 40 {REMOTE_DIR}/logs/udp_bridge.log || true
+        if [[ "$bridge_ready" -eq 1 ]] && kill -0 "$bridge_pid" 2>/dev/null; then
+          echo BRIDGE_READY=1
+          exit 0
+        fi
+        echo BRIDGE_READY=0
+        exit 21
         """
     )
     with tempfile.NamedTemporaryFile("w", delete=False, suffix="_start_bridge.sh") as fh:
@@ -105,8 +146,8 @@ def main() -> int:
     finally:
         os.unlink(local_start)
 
-    if "BRIDGE_PID=" not in out:
-        print("[tianyee-bridge] warning: no BRIDGE_PID in output", file=sys.stderr)
+    if "BRIDGE_READY=1" not in out:
+        print("[tianyee-bridge] failed: bridge did not become ready", file=sys.stderr)
         return 1
     return 0
 

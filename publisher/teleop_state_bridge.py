@@ -12,6 +12,7 @@ from typing import Any
 DEFAULT_UDP_HOST = "127.0.0.1"
 DEFAULT_UDP_PORT = 17981
 HAND_REG_TO_RAD = 0.1 * 3.141592653589793 / 180.0
+DEFAULT_ARM_AXES = 7
 
 
 @dataclass
@@ -33,6 +34,18 @@ class TeleopStateSnapshot:
 def hand_registers_to_radians(registers: list[int | float]) -> list[float]:
     """Inspire 手角度寄存器（0.1°）转弧度。"""
     return [float(v) * HAND_REG_TO_RAD for v in registers]
+
+
+def normalize_arm_joints(
+    joints: list[int | float] | None,
+    axes: int = DEFAULT_ARM_AXES,
+) -> list[float]:
+    """Normalize collection topics to seven axes; six-axis arms get J7=0."""
+    size = max(1, int(axes))
+    values = [float(v) for v in (joints or [])]
+    if len(values) < size:
+        values.extend([0.0] * (size - len(values)))
+    return values[:size]
 
 
 def encode_snapshot(snapshot: TeleopStateSnapshot) -> bytes:

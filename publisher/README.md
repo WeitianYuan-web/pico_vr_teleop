@@ -16,6 +16,10 @@ ROS2 发布者节点，发布以下话题：
 其中 3 路相机话题发布 RealSense 实时彩色图像，每路相机使用独立采集线程发布；`/puppet/joint_*` 与 `/puppet/end_pose_*` 默认监听本机 UDP `17981`，
 接收 `backends` 遥操作上报的臂状态后发布。
 
+`/puppet/joint_left` 与 `/puppet/joint_right` 使用统一的 7 轴采集 schema：
+`joint_1` … `joint_7`。7 轴机器人发布全部真实值；6 轴机器人在 `joint_7`
+发布 `0.0`，使下游数据维度固定。
+
 **默认不解耦手状态**：`publish_hands_from_udp` 默认为 `false`。真实手状态由统一手控
 `./scripts/run_hand_controller.sh` 发布到 `/puppet/hand_*`。仅在 `--legacy-direct-hand` 且需
 publisher 从 UDP 接手时设：

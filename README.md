@@ -14,10 +14,9 @@ pico_vr_teleop/
 ├── common/             # 共用数学 / clutch / 滤波 / WSS
 ├── controllers/io_hand/ # 统一 RH56F2 手控（唯一占串口）
 ├── publisher/          # ROS2 + UDP 臂状态 + RealSense
-├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand、tianyee_ros_ws
-└── scripts/            # setup / 一键启动 / 手控包装 / 天轶桥
+├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand（厂商 SDK，不入库）
+└── scripts/            # setup / 一键启动 / 手控包装 / 天轶桥入口（薄包装）
 ```
-
 ## 初始化
 
 ```bash
@@ -37,7 +36,19 @@ source .venv/bin/activate
 ./scripts/run_full_stack.sh --backend piper
 ./scripts/run_full_stack.sh --backend jaka
 ./scripts/run_full_stack.sh --backend g1 -- --motion --network-interface enp12s0
-./scripts/run_full_stack.sh --backend tianyee --no-can-activate --no-publisher
+./scripts/run_full_stack.sh --backend tianyee
+```
+
+Tianyee 模式默认把本机 ROS 放在 Domain 42，并只启用 loopback/SHM；机器人继续使用
+Domain 0。机械臂命令走 UDP bridge，因此开启本机 publisher 也不会加入机器人 ROS 图。
+可用 `TIANYEE_LOCAL_ROS_DOMAIN_ID` 修改本机 Domain；仅在明确需要 ROS 直连调试时设置
+`TIANYEE_ROS_ISOLATION=0`。
+
+天轶机器人侧建议先持久安装 UDP 桥（开机自启 + 状态监控）：
+
+```bash
+./scripts/run_tianyee_bridge_install.sh
+python3 scripts/query_tianyee_bridge_status.py
 ```
 
 常用开关：`--no-can-activate`、`--no-publisher`；`--` 之后参数传给遥操作。

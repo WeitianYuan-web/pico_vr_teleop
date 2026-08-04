@@ -9,6 +9,8 @@ VENV_ACTIVATE="${VENV_DIR}/bin/activate"
 WEBXR_DIR="${PROJECT_DIR}/webxr"
 LOG_DIR="${PROJECT_DIR}/logs"
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
+TIANYEE_ROS_ISOLATION="${TIANYEE_ROS_ISOLATION:-1}"
+TIANYEE_LOCAL_ROS_DOMAIN_ID="${TIANYEE_LOCAL_ROS_DOMAIN_ID:-42}"
 
 DO_CAN_ACTIVATE=1
 DO_VR_SERVER=1
@@ -50,6 +52,9 @@ usage() {
   ROS_SETUP             ROS setup.bash 路径（默认自动探测）
   CAN_BITRATE           CAN 波特率（默认 1000000）
   ROS_ARGS              传给 publisher 的 ros-args 字符串
+  TIANYEE_ROS_ISOLATION 天轶本机 ROS 隔离；1=开启（默认），0=关闭
+  TIANYEE_LOCAL_ROS_DOMAIN_ID
+                        天轶本机 ROS Domain（默认 42；机器人为 0）
 
 示例:
   $(basename "$0")
@@ -126,8 +131,16 @@ activate_runtime_env() {
   set -u
   # shellcheck disable=SC1091
   source "${VENV_ACTIVATE}"
-  # 大图本机传输：加大 SHM，同时保留内置传输以便 ros2 CLI 能发现话题
-  local fastdds_xml="${PROJECT_DIR}/publisher/fastdds_local_image.xml"
+  local fastdds_xml
+  if [[ "${BACKEND}" == "tianyee" && "${TIANYEE_ROS_ISOLATION}" == "1" ]]; then
+    # 天轶控制使用 UDP bridge，本机 ROS 无需进入机器人 Domain 0。
+    # 独立 Domain + loopback/SHM 双重隔离，避免 DDS discovery/图消息到达机器人。
+    export ROS_DOMAIN_ID="${TIANYEE_LOCAL_ROS_DOMAIN_ID}"
+    fastdds_xml="${PROJECT_DIR}/publisher/fastdds_local_only.xml"
+  else
+    # 其他后端维持原行为：大图优先走 SHM，同时保留内置传输。
+    fastdds_xml="${PROJECT_DIR}/publisher/fastdds_local_image.xml"
+  fi
   if [[ -f "${fastdds_xml}" ]]; then
     export FASTRTPS_DEFAULT_PROFILES_FILE="${fastdds_xml}"
     export FASTDDS_DEFAULT_PROFILES_FILE="${fastdds_xml}"
@@ -252,6 +265,9 @@ echo "============================================================"
 echo "[Launcher] 项目目录: ${PROJECT_DIR}"
 echo "[Launcher] 虚拟环境: ${VENV_DIR}"
 echo "[Launcher] 运行时: source ROS + source .venv/bin/activate"
+if [[ "${BACKEND}" == "tianyee" && "${TIANYEE_ROS_ISOLATION}" == "1" ]]; then
+  echo "[Launcher] 天轶本机 ROS 隔离: Domain ${TIANYEE_LOCAL_ROS_DOMAIN_ID} + loopback/SHM（机器人 Domain 0）"
+fi
 
 activate_can_ports
 
@@ -300,10 +316,11 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
   fi
   echo "[Launcher] 遥操作后端: ${BACKEND}"
   if [[ "${BACKEND}" == "tianyee" ]]; then
-    echo "[Launcher] 天轶：先确保机器人 bridge 已启动: ./scripts/run_tianyee_udp_bridge.sh --prepare"
+    echo "[Launcher] 天轶：确认 bridge 服务已启动（systemd: tianyee_udp_bridge）"
+    echo "[Launcher] 遥操作会 UDP prepare（使能/mode3/激活 endpose）；桥接开机默认不 prepare"
     # 默认 UDP 参数，可被 TELEOP_ARGS 覆盖
     if [[ ${#TELEOP_ARGS[@]} -eq 0 ]]; then
-      TELEOP_ARGS=(--transport udp --udp-host "${TIANYEE_UDP_HOST:-192.168.41.1}")
+      TELEOP_ARGS=(--transport udp --udp-host "${TIANYEE_UDP_HOST:-192.168.41.1}" --prepare)
     fi
   fi
   echo "[Launcher] 启动遥操作（前台）: ${TELEOP_ENTRY} ${TELEOP_ARGS[*]:-}"

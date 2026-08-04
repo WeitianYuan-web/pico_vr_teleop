@@ -51,7 +51,11 @@ from sensor_msgs.msg import CompressedImage, Image, JointState
 if PUBLISHER_DIR not in sys.path:
     sys.path.insert(0, PUBLISHER_DIR)
 
-from teleop_state_bridge import SideTeleopState, TeleopStateReceiver  # noqa: E402
+from teleop_state_bridge import (  # noqa: E402
+    SideTeleopState,
+    TeleopStateReceiver,
+    normalize_arm_joints,
+)
 
 
 # 状态话题：小消息，depth=1 即可
@@ -370,7 +374,9 @@ class TeleopPublisherNode(Node):
                 JointState, "/puppet/hand_right", SENSOR_QOS
             )
 
-        self.arm_joint_names = [f"joint_{i}" for i in range(1, 7)]
+        # Unified collection schema: every arm topic has seven positions.
+        # Six-axis robots are padded with a zero-valued joint_7.
+        self.arm_joint_names = [f"joint_{i}" for i in range(1, 8)]
         self.hand_joint_names = [f"finger_{i}" for i in range(1, 7)]
 
         self.state_receiver = TeleopStateReceiver(
@@ -519,12 +525,7 @@ class TeleopPublisherNode(Node):
         msg.header.stamp = stamp_msg
         msg.header.frame_id = frame_id
         msg.name = names
-        if positions is None:
-            positions = [0.0] * len(names)
-        elif len(positions) < len(names):
-            positions = list(positions) + [0.0] * (len(names) - len(positions))
-        else:
-            positions = positions[: len(names)]
+        positions = normalize_arm_joints(positions, len(names))
         msg.position = [float(v) for v in positions]
         msg.velocity = [0.0] * len(names)
         msg.effort = [0.0] * len(names)

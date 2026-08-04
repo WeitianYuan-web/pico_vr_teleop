@@ -1,0 +1,30 @@
+[Unit]
+Description=Tianyi XARM / tianyi2_bringup (hardware:=real)
+# Wait for official body stack; avoid racing proc_manager self-check
+After=network-online.target proc_manager.service
+Wants=network-online.target
+Requires=proc_manager.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+Environment=ROS_HOME=/tmp/xarm_run/ros_home
+Environment=FASTRTPS_DEFAULT_PROFILES_FILE=/home/ubuntu/data/param/dds_profile.xml
+Environment=RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+# Give proc_manager time to finish Initing/self-check and start body_control
+ExecStartPre=/bin/mkdir -p /tmp/xarm_run/ros_home /home/ubuntu/pico_vr_teleop_tianyee/logs
+ExecStartPre=/home/ubuntu/pico_vr_teleop_tianyee/robot_service/wait_proc_manager_running.sh
+ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash; source /home/ubuntu/ros2ws/install/setup.bash; source /home/ubuntu/XARM/install/setup.bash; exec ros2 launch tianyi2_bringup tianyi2.launch.py hardware:=real'
+Restart=on-failure
+RestartSec=10
+# wait_proc_manager_running.sh may need up to ~180s after OOM/reboot;
+# default TimeoutStartSec=90 kills ExecStartPre too early (auto-restart loop).
+TimeoutStartSec=360
+MemoryMax=2G
+MemoryHigh=1536M
+StandardOutput=append:/home/ubuntu/pico_vr_teleop_tianyee/logs/xarm.service.log
+StandardError=append:/home/ubuntu/pico_vr_teleop_tianyee/logs/xarm.service.log
+
+[Install]
+WantedBy=multi-user.target

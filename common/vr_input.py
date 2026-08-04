@@ -20,7 +20,7 @@ def rotation_enabled(
     *,
     btn_a_index: int = BTN_A_INDEX,
 ) -> bool:
-    if mode == "off":
+    if mode in ("off", "never"):
         return False
     if mode == "hold-a":
         return is_button_pressed(ctrl, btn_a_index)

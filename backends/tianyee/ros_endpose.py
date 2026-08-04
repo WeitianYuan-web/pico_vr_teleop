@@ -78,18 +78,40 @@ class TianyiRosEndpose:
         self._cli_mode = self.node.create_client(Mode, "/EAIHardware/set_arm_mode")
         self._SetBool = SetBool
         self._Mode = Mode
+        self._cli_switch = None
+        self._SwitchController = None
+        try:
+            from controller_manager_msgs.srv import SwitchController
+
+            self._SwitchController = SwitchController
+            self._cli_switch = self.node.create_client(
+                SwitchController, "/controller_manager/switch_controller"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.node.get_logger().warn(f"SwitchController client unavailable: {exc}")
 
     def _on_joint_state(self, msg) -> None:  # noqa: ANN001
         for name, pos in zip(msg.name, msg.position):
             self._joint_pos[str(name)] = float(pos)
 
-    def current_arm_q(self, side: Side, timeout_s: float = 2.0) -> list[float] | None:
+    def arm_joint_names(self, side: Side) -> list[str]:
+        """Return the canonical seven-axis order used by Tianyee controllers."""
+        return list(self._joint_names[side])
+
+    def arm_q_snapshot(self, side: Side) -> list[float] | None:
+        """Return cached joint positions without spinning or blocking the UDP loop."""
         names = self._joint_names[side]
+        if not all(name in self._joint_pos for name in names):
+            return None
+        return [self._joint_pos[name] for name in names]
+
+    def current_arm_q(self, side: Side, timeout_s: float = 2.0) -> list[float] | None:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             self.spin_once(0.05)
-            if all(n in self._joint_pos for n in names):
-                return [self._joint_pos[n] for n in names]
+            q = self.arm_q_snapshot(side)
+            if q is not None:
+                return q
         return None
 
     def spin_once(self, timeout_sec: float = 0.0) -> None:
@@ -150,6 +172,39 @@ class TianyiRosEndpose:
         activate: list[str],
         timeout: float = 10.0,
     ) -> bool:
+        """Prefer native /controller_manager/switch_controller (CLI often times out)."""
+        if self._cli_switch is not None and self._SwitchController is not None:
+            try:
+                if not self._cli_switch.wait_for_service(timeout_sec=min(3.0, timeout)):
+                    raise RuntimeError("switch_controller service not ready")
+                req = self._SwitchController.Request()
+                req.activate_controllers = list(activate)
+                req.deactivate_controllers = list(deactivate)
+                # BEST_EFFORT: don't fail if a named controller is already in desired state
+                if hasattr(self._SwitchController.Request, "BEST_EFFORT"):
+                    req.strictness = self._SwitchController.Request.BEST_EFFORT
+                else:
+                    req.strictness = 1
+                if hasattr(req, "activate_asap"):
+                    req.activate_asap = True
+                if hasattr(req, "timeout"):
+                    from builtin_interfaces.msg import Duration
+
+                    sec = int(max(1.0, timeout))
+                    req.timeout = Duration(sec=sec, nanosec=0)
+                fut = self._cli_switch.call_async(req)
+                self._rclpy.spin_until_future_complete(self.node, fut, timeout_sec=timeout + 2.0)
+                if not fut.done() or fut.result() is None:
+                    raise RuntimeError("switch_controller no reply")
+                ok = bool(getattr(fut.result(), "ok", True))
+                self.node.get_logger().info(
+                    f"switch_controller activate={activate} deactivate={deactivate} ok={ok}"
+                )
+                if ok:
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                self.node.get_logger().warn(f"native switch_controller failed: {exc}")
+
         import subprocess
 
         cmd = ["ros2", "control", "switch_controllers"]
@@ -165,7 +220,7 @@ class TianyiRosEndpose:
             self.node.get_logger().info(f"{' '.join(cmd)} → rc={r.returncode} {out.strip()[:240]}")
             return r.returncode == 0
         except Exception as exc:  # noqa: BLE001
-            self.node.get_logger().warn(f"switch_controllers failed: {exc}")
+            self.node.get_logger().warn(f"switch_controllers CLI failed: {exc}")
             return False
 
     def activate_jointspace_controllers(self) -> None:
@@ -273,48 +328,116 @@ class TianyiRosEndpose:
         except Exception as exc:  # noqa: BLE001
             self.node.get_logger().warn(f"activate_controllers failed: {exc}")
 
-    def hold_current_endpose(self, *, seconds: float = 0.4, hz: float = 30.0) -> None:
-        """Publish current TCP on /endposetarget_* to claim endpose control."""
+    def snapshot_tcp_targets(self) -> dict[Side, tuple[np.ndarray, np.ndarray]]:
+        """Freeze both measured TCP poses for a controller hand-off."""
+        targets: dict[Side, tuple[np.ndarray, np.ndarray]] = {}
+        for side in ("left", "right"):
+            try:
+                pos, quat = self.lookup_tcp(side)  # type: ignore[arg-type]
+                targets[side] = (pos.copy(), quat.copy())  # type: ignore[index]
+            except Exception as exc:  # noqa: BLE001
+                self.node.get_logger().warn(f"snapshot TCP {side} failed: {exc}")
+        return targets
+
+    def hold_endpose_targets(
+        self,
+        targets: dict[Side, tuple[np.ndarray, np.ndarray]],
+        *,
+        seconds: float = 0.4,
+        hz: float = 30.0,
+    ) -> None:
+        """Repeatedly publish one frozen target; never chase a moving TCP."""
         period = 1.0 / max(1.0, float(hz))
         end = time.time() + max(0.15, float(seconds))
         while time.time() < end:
-            for side in ("left", "right"):
+            for side, (pos, quat) in targets.items():
                 try:
-                    pos, quat = self.lookup_tcp(side)  # type: ignore[arg-type]
-                    self.publish_pose(side, pos, quat)
+                    self.publish_pose(side, pos, quat)  # type: ignore[arg-type]
                 except Exception:  # noqa: BLE001
                     pass
             self.spin_once(0.0)
             time.sleep(period)
 
-    def call_enable(self, enable: bool, timeout: float = 10.0) -> None:
-        if not self._cli_en.wait_for_service(timeout_sec=timeout):
+    def hold_current_endpose(self, *, seconds: float = 0.4, hz: float = 30.0) -> None:
+        """Snapshot current TCP once, then hold that fixed endpose target."""
+        targets = self.snapshot_tcp_targets()
+        self.hold_endpose_targets(targets, seconds=seconds, hz=hz)
+
+    def _cli_service_call(self, argv: list[str], *, timeout: float) -> bool:
+        """Fallback when in-process service clients miss discovery."""
+        import subprocess
+
+        cmd = ["ros2", "service", "call", *argv]
+        try:
+            r = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(5.0, timeout),
+            )
+            out = ((r.stdout or "") + (r.stderr or "")).strip()
+            self.node.get_logger().info(f"{' '.join(cmd)} → rc={r.returncode} {out[:220]}")
+            return r.returncode == 0
+        except Exception as exc:  # noqa: BLE001
+            self.node.get_logger().warn(f"cli service call failed: {exc}")
+            return False
+
+    def call_enable(self, enable: bool, timeout: float = 20.0) -> None:
+        # Spin a bit so discovery settles after bridge startup / service restarts.
+        deadline = time.time() + min(8.0, timeout)
+        while time.time() < deadline and not self._cli_en.service_is_ready():
+            self.spin_once(0.1)
+
+        if self._cli_en.wait_for_service(timeout_sec=min(5.0, timeout)):
+            req = self._SetBool.Request()
+            req.data = bool(enable)
+            fut = self._cli_en.call_async(req)
+            self._rclpy.spin_until_future_complete(self.node, fut, timeout_sec=timeout)
+            if fut.done() and fut.result() is not None:
+                self.node.get_logger().info(f"set_arm_enable({enable}): {fut.result().message}")
+                return
+
+        ok = self._cli_service_call(
+            [
+                "/EAIHardware/set_arm_enable",
+                "std_srvs/srv/SetBool",
+                f"{{data: {str(bool(enable)).lower()}}}",
+            ],
+            timeout=timeout,
+        )
+        if not ok:
             raise RuntimeError(
                 "set_arm_enable unavailable — 机器人上需先启动 body_control 与 "
-                "tianyi2_bringup（hardware:=real）。例如：\n"
-                "  ros2 launch body_control body.launch.py\n"
-                "  ros2 launch tianyi2_bringup tianyi2.launch.py hardware:=real"
+                "tianyi2_bringup（hardware:=real）"
             )
-        req = self._SetBool.Request()
-        req.data = bool(enable)
-        fut = self._cli_en.call_async(req)
-        self._rclpy.spin_until_future_complete(self.node, fut, timeout_sec=timeout)
-        if not fut.done() or fut.result() is None:
-            raise RuntimeError("set_arm_enable failed")
-        self.node.get_logger().info(f"set_arm_enable({enable}): {fut.result().message}")
 
-    def call_mode(self, mode: int = 3, timeout: float = 10.0) -> None:
-        if not self._cli_mode.wait_for_service(timeout_sec=timeout):
+    def call_mode(self, mode: int = 3, timeout: float = 20.0) -> None:
+        deadline = time.time() + min(8.0, timeout)
+        while time.time() < deadline and not self._cli_mode.service_is_ready():
+            self.spin_once(0.1)
+
+        if self._cli_mode.wait_for_service(timeout_sec=min(5.0, timeout)):
+            req = self._Mode.Request()
+            req.mode = int(mode)
+            fut = self._cli_mode.call_async(req)
+            self._rclpy.spin_until_future_complete(self.node, fut, timeout_sec=timeout)
+            if fut.done() and fut.result() is not None:
+                self.node.get_logger().info(f"set_arm_mode({mode}): {fut.result().info}")
+                return
+
+        ok = self._cli_service_call(
+            [
+                "/EAIHardware/set_arm_mode",
+                "eai_manipulator_msgs/srv/Mode",
+                f"{{mode: {int(mode)}}}",
+            ],
+            timeout=timeout,
+        )
+        if not ok:
             raise RuntimeError(
                 "set_arm_mode unavailable — 请确认 body_control / XARM 已启动且 DDS 正常"
             )
-        req = self._Mode.Request()
-        req.mode = int(mode)
-        fut = self._cli_mode.call_async(req)
-        self._rclpy.spin_until_future_complete(self.node, fut, timeout_sec=timeout)
-        if not fut.done() or fut.result() is None:
-            raise RuntimeError("set_arm_mode failed")
-        self.node.get_logger().info(f"set_arm_mode({mode}): {fut.result().info}")
 
     def enable_auto_switch(self) -> None:
         import subprocess
@@ -335,6 +458,9 @@ class TianyiRosEndpose:
             self.call_enable(True)
             self.call_mode(mode)
         self.enable_auto_switch()
+        # Boot bridge skips --prepare; without active endpose controllers UDP poses do nothing.
+        self.activate_endpose_controllers()
+        self.hold_current_endpose(seconds=0.25)
 
     def shutdown(self) -> None:
         try:
