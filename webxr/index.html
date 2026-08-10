@@ -93,7 +93,9 @@
         setTimeout(() => {
             const el = document.getElementById('status');
             if (el && el.innerText === '初始化中...') {
-                el.innerText = '脚本加载超时：请确认可访问 ./vendor/three.module.js，并强制刷新页面';
+                el.innerText =
+                    '脚本加载超时：three.module.js 未完成（常见于 HTTPS/证书或弱网）。' +
+                    '请用 Wi‑Fi IP 打开页面、重新接受证书后强制刷新；勿用机器人网段 192.168.127.x';
             }
         }, 8000);
     </script>

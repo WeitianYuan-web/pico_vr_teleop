@@ -1,6 +1,6 @@
 # pico_vr_teleop
 
-PICO WebXR 双臂遥操作：一套 WebXR/WSS 管线，可切换 **Piper / JAKA / Unitree G1 / 天轶(tianyee)** 后端；可选 ROS2 状态发布与 RealSense；灵巧手经**统一手控**执行（VR / IO 只发指令）。
+PICO WebXR 双臂遥操作：一套 WebXR/WSS 管线，可切换 **Piper / JAKA / Unitree G1 / 天轶(tianyee) / Noetix M1** 后端；可选 ROS2 状态发布与 RealSense；灵巧手经**统一手控**执行（VR / IO 只发指令）。
 
 数据流：`PICO 浏览器 → webxr/server.py (WSS) → entrypoints/* → backends/<robot>/`
 
@@ -10,11 +10,11 @@ PICO WebXR 双臂遥操作：一套 WebXR/WSS 管线，可切换 **Piper / JAKA 
 pico_vr_teleop/
 ├── webxr/              # 网页 + HTTPS/WSS
 ├── entrypoints/        # 薄入口（按机型分发）
-├── backends/           # piper | jaka | g1 | tianyee
+├── backends/           # piper | jaka | g1 | tianyee | noetix
 ├── common/             # 共用数学 / clutch / 滤波 / WSS
 ├── controllers/io_hand/ # 统一 RH56F2 手控（唯一占串口）
 ├── publisher/          # ROS2 + UDP 臂状态 + RealSense
-├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand（厂商 SDK，不入库）
+├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand、cartesian_min_ws（厂商 SDK，不入库）
 └── scripts/            # setup / 一键启动 / 手控包装 / 天轶桥入口（薄包装）
 ```
 ## 初始化
@@ -37,10 +37,12 @@ source .venv/bin/activate
 ./scripts/run_full_stack.sh --backend jaka
 ./scripts/run_full_stack.sh --backend g1 -- --motion --network-interface enp12s0
 ./scripts/run_full_stack.sh --backend tianyee
+./scripts/run_full_stack.sh --backend noetix
 ```
 
-Tianyee 与其它后端一键启动时，本机 ROS 默认都在 **Domain 42**（`LOCAL_ROS_DOMAIN_ID`），
+Tianyee 与其它后端一键启动时，本机 ROS（publisher）默认都在 **Domain 42**（`LOCAL_ROS_DOMAIN_ID`），
 避免与机上/实验室常见 Domain 0 串网。天轶额外使用 loopback/SHM Fast DDS 配置。
+**Noetix 遥操作例外**：子进程用 `rmw_cyclonedds_cpp` + `cartesian_min_ws` 的 `cyclonedds.xml` 直连机器人，不套 Domain 42/FastDDS；publisher 仍走本机隔离。
 可用 `LOCAL_ROS_DOMAIN_ID` 修改；仅在明确需要进 Domain 0 时设 `LOCAL_ROS_ISOLATION=0`。
 旧变量名 `TIANYEE_LOCAL_ROS_DOMAIN_ID` / `TIANYEE_ROS_ISOLATION` 仍可用。
 
@@ -59,6 +61,7 @@ python3 scripts/query_tianyee_bridge_status.py
 | jaka | SDK `servo_p` |
 | g1 | DDS + Placo IK |
 | tianyee | WebXR → UDP → 机器人 `/endposetarget_*`（见 `backends/tianyee/README.md`） |
+| noetix | WebXR → CycloneDDS → `/Cartesian_Cmd_Topic`（见 `backends/noetix/README.md`） |
 
 ## 统一手控（指令源与执行解耦）
 
@@ -107,5 +110,5 @@ rh56f2_controller     →  唯一写 RS485，并发布 /puppet/hand_*
 
 - [DEPENDENCIES.md](DEPENDENCIES.md)
 - [controllers/io_hand/README.md](controllers/io_hand/README.md)
-- [backends/piper](backends/piper/README.md) / [jaka](backends/jaka/README.md) / [g1](backends/g1/README.md)
+- [backends/piper](backends/piper/README.md) / [jaka](backends/jaka/README.md) / [g1](backends/g1/README.md) / [tianyee](backends/tianyee/README.md) / [noetix](backends/noetix/README.md)
 - [third_party/README.md](third_party/README.md)

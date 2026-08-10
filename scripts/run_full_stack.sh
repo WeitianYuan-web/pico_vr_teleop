@@ -38,12 +38,12 @@ usage() {
 
 一键启动:
   1) WebXR HTTPS/WSS 服务 (server.py)
-  2) 遥操作 (backend 可选 piper/jaka/g1/tianyee)
+  2) 遥操作 (backend 可选 piper/jaka/g1/tianyee/noetix)
   3) ROS 发布节点 (teleop_realsense_publisher.py)
 
 选项:
   --no-can-activate     跳过 can0/can1 自动激活
-  --backend <name>      选择遥操作后端: piper | jaka | g1 | tianyee（默认 piper）
+  --backend <name>      选择遥操作后端: piper | jaka | g1 | tianyee | noetix（默认 piper）
   --no-vr-server        不启动 WebXR 服务
   --no-teleop           不启动遥操作
   --no-publisher        不启动 ROS 发布节点
@@ -65,9 +65,11 @@ usage() {
   $(basename "$0") --backend g1 -- --motion --network-interface enp12s0
   $(basename "$0") --backend piper -- --disable-hands
   $(basename "$0") --backend tianyee --no-can-activate --no-publisher
+  $(basename "$0") --backend noetix --no-can-activate
   ROS_ARGS="-p camera_f_serial:=xxxx" $(basename "$0")
 
 手串口由 ./scripts/run_hand_controller.sh 独占；Piper Trigger 默认只发 /hand_cmd。
+Noetix 遥操作走 CycloneDDS（本机 192.168.127.40），publisher 仍用本机 Domain 隔离。
 EOF
 }
 
@@ -113,8 +115,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" && "${BACKEND}" != "tianyee" ]]; then
-  echo "[错误] --backend 仅支持 piper / jaka / g1 / tianyee，当前: ${BACKEND}"
+if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" && "${BACKEND}" != "tianyee" && "${BACKEND}" != "noetix" ]]; then
+  echo "[错误] --backend 仅支持 piper / jaka / g1 / tianyee / noetix，当前: ${BACKEND}"
   exit 1
 fi
 
@@ -272,8 +274,21 @@ echo "[Launcher] 运行时: source ROS + source .venv/bin/activate"
 if [[ "${LOCAL_ROS_ISOLATION}" == "1" ]]; then
   if [[ "${BACKEND}" == "tianyee" ]]; then
     echo "[Launcher] 本机 ROS 隔离: Domain ${LOCAL_ROS_DOMAIN_ID} + loopback/SHM（机器人 Domain 0）"
+  elif [[ "${BACKEND}" == "noetix" ]]; then
+    echo "[Launcher] publisher 本机 Domain ${LOCAL_ROS_DOMAIN_ID}；遥操作单独 CycloneDDS → 192.168.127.20"
   else
     echo "[Launcher] 本机 ROS Domain ${LOCAL_ROS_DOMAIN_ID}（与常见机上 Domain 0 隔离）"
+  fi
+fi
+
+if [[ "${BACKEND}" == "noetix" ]]; then
+  if ! ip -4 -o addr 2>/dev/null | grep -q "192.168.127.40"; then
+    echo "[Launcher] 警告: 未检测到本机 IP 192.168.127.40（Noetix CycloneDDS 对端 192.168.127.20）"
+  fi
+  CARTESIAN_WS="${PROJECT_DIR}/third_party/cartesian_min_ws"
+  if [[ ! -f "${CARTESIAN_WS}/install/setup.bash" ]]; then
+    echo "[错误] Noetix 需要已编译的 ${CARTESIAN_WS}/install/setup.bash"
+    exit 1
   fi
 fi
 
@@ -319,6 +334,8 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/g1_dual_webxr.py"
   elif [[ "${BACKEND}" == "tianyee" ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/tianyee_dual_webxr.py"
+  elif [[ "${BACKEND}" == "noetix" ]]; then
+    TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/noetix_dual_webxr.py"
   else
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/piper_dual_webxr.py"
   fi
@@ -330,28 +347,54 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
     if [[ ${#TELEOP_ARGS[@]} -eq 0 ]]; then
       TELEOP_ARGS=(--transport udp --udp-host "${TIANYEE_UDP_HOST:-192.168.41.1}" --prepare)
     fi
+  elif [[ "${BACKEND}" == "noetix" ]]; then
+    echo "[Launcher] Noetix：遥操作 CycloneDDS 直连机器人（跳过 Domain ${LOCAL_ROS_DOMAIN_ID}/FastDDS）"
   fi
   echo "[Launcher] 启动遥操作（前台）: ${TELEOP_ENTRY} ${TELEOP_ARGS[*]:-}"
   echo "[Launcher] 状态默认上报 UDP 127.0.0.1:17981 -> publisher"
   echo "[Launcher] PICO 访问页面见 ${LOG_DIR}/vr_server.log 中的 HTTPS 地址"
   echo "------------------------------------------------------------"
   (
-    activate_runtime_env
-    cd "${PROJECT_DIR}"
-    if [[ "${BACKEND}" == "jaka" ]]; then
-      JAKA_SDK_DIR="${PROJECT_DIR}/backends/jaka/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
-      if [[ -d "${JAKA_SDK_DIR}" ]]; then
-        export LD_LIBRARY_PATH="${JAKA_SDK_DIR}:${LD_LIBRARY_PATH:-}"
-      else
-        echo "[Launcher] 警告: 未找到 JAKA SDK 目录: ${JAKA_SDK_DIR}"
+    if [[ "${BACKEND}" == "noetix" ]]; then
+      # 遥操作走机器人 Cyclone 网络，不能套本机 Domain42 / FastDDS isolation。
+      set +u
+      if [[ -n "${ROS_SETUP}" && -f "${ROS_SETUP}" ]]; then
+        # shellcheck disable=SC1090
+        source "${ROS_SETUP}"
       fi
-    elif [[ "${BACKEND}" == "g1" ]]; then
-      if [[ -n "${UNITREE_SDK2_PYTHON:-}" && -d "${UNITREE_SDK2_PYTHON}" ]]; then
-        export PYTHONPATH="${UNITREE_SDK2_PYTHON}:${PYTHONPATH:-}"
+      # shellcheck disable=SC1091
+      source "${PROJECT_DIR}/third_party/cartesian_min_ws/install/setup.bash"
+      set -u
+      # shellcheck disable=SC1091
+      source "${VENV_ACTIVATE}"
+      unset ROS_DOMAIN_ID || true
+      unset FASTRTPS_DEFAULT_PROFILES_FILE || true
+      unset FASTDDS_DEFAULT_PROFILES_FILE || true
+      export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+      CYCLONE_XML="${PROJECT_DIR}/third_party/cartesian_min_ws/src/noetix_python_controller/config/cyclonedds.xml"
+      if [[ -f "${CYCLONE_XML}" ]]; then
+        export CYCLONEDDS_URI="file://${CYCLONE_XML}"
       fi
-    elif [[ "${BACKEND}" == "tianyee" ]]; then
-      export PYTHONPATH="${PROJECT_DIR}/backends/tianyee:${PYTHONPATH:-}"
+      export PYTHONPATH="${PROJECT_DIR}:${PROJECT_DIR}/backends/noetix:${PYTHONPATH:-}"
+      echo "[Launcher] Noetix teleop RMW=${RMW_IMPLEMENTATION} CYCLONEDDS_URI=${CYCLONEDDS_URI:-<unset>}"
+    else
+      activate_runtime_env
+      if [[ "${BACKEND}" == "jaka" ]]; then
+        JAKA_SDK_DIR="${PROJECT_DIR}/backends/jaka/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu"
+        if [[ -d "${JAKA_SDK_DIR}" ]]; then
+          export LD_LIBRARY_PATH="${JAKA_SDK_DIR}:${LD_LIBRARY_PATH:-}"
+        else
+          echo "[Launcher] 警告: 未找到 JAKA SDK 目录: ${JAKA_SDK_DIR}"
+        fi
+      elif [[ "${BACKEND}" == "g1" ]]; then
+        if [[ -n "${UNITREE_SDK2_PYTHON:-}" && -d "${UNITREE_SDK2_PYTHON}" ]]; then
+          export PYTHONPATH="${UNITREE_SDK2_PYTHON}:${PYTHONPATH:-}"
+        fi
+      elif [[ "${BACKEND}" == "tianyee" ]]; then
+        export PYTHONPATH="${PROJECT_DIR}/backends/tianyee:${PYTHONPATH:-}"
+      fi
     fi
+    cd "${PROJECT_DIR}"
     exec python "${TELEOP_ENTRY}" "${TELEOP_ARGS[@]}"
   )
 else

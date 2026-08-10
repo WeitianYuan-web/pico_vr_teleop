@@ -1,6 +1,6 @@
 # backends/
 
-三机械臂后端。统一约定：
+机械臂后端。统一约定：
 
 - 入口：`entrypoints/<robot>_dual_webxr.py`
 - 主循环：各后端的 `vr_teleop_dual.py`（Piper 为 `teleop/dual_arm_dual_hand_webxr.py`）
@@ -13,6 +13,7 @@
 | jaka | `jaka/sdk/` | 厂商包 → `jaka/20260104145805A007/` |
 | g1 | `g1/` | `unitree_sdk2_python` + CycloneDDS |
 | tianyee | `tianyee/` | 机器人 XARM；UDP 桥见 `tianyee/README.md` |
+| noetix | `noetix/` | `third_party/cartesian_min_ws`（colcon build + CycloneDDS） |
 
 跨设备清单见 [DEPENDENCIES.md](../DEPENDENCIES.md)。
 
