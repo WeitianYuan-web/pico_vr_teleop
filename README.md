@@ -12,7 +12,7 @@ pico_vr_teleop/
 ├── entrypoints/        # 薄入口（按机型分发）
 ├── backends/           # piper | jaka | g1 | tianyee | noetix
 ├── common/             # 共用数学 / clutch / 滤波 / WSS
-├── controllers/io_hand/ # 统一 RH56F2 手控（唯一占串口）
+├── controllers/io_hand/ # 统一手控 RH56F2 / RH5DG2（唯一占串口）
 ├── publisher/          # ROS2 + UDP 臂状态 + RealSense
 ├── third_party/        # pyAgxArm、InspireHandSDK_Y、io_exotrans2hand、cartesian_min_ws（厂商 SDK，不入库）
 └── scripts/            # setup / 一键启动 / 手控包装 / 天轶桥入口（薄包装）
@@ -87,6 +87,8 @@ rh56f2_controller     →  唯一写 RS485，并发布 /puppet/hand_*
 # 或 JAKA：
 # ./scripts/run_full_stack.sh --backend jaka --no-publisher --no-can-activate
 ```
+
+RH5DG2（G2，13 DOF）把三个脚本都加上 `--model rh5dg2`，或先 `export IO_HAND_MODEL=rh5dg2`。只接一只手时加 `-p enable_left_hand:=false`。
 
 完整说明：[controllers/io_hand/README.md](controllers/io_hand/README.md)。
 

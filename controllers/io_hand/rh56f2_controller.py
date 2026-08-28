@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""统一 RH56F2 手控：只执行，不产生遥操作指令。
+"""统一 Inspire 手控：只执行，不产生遥操作指令。
+
+默认 RH56F2；RH5DG2 用 hand_model:=rh5dg2 或环境变量 IO_HAND_MODEL。
 
 指令源（任一，同侧最新优先）:
   /hand_cmd/left|right
-  /io_teleop/Inspire_RH56F2/joint_cmd_finger_left|right  （兼容 zenoh2ros）
+  /io_teleop/<Inspire_RH56F2|Inspire_RH5DG2>/joint_cmd_finger_left|right
 
 状态输出:
-  /puppet/hand_left|right  （finger_1..6，rad；仅本节点占串口时有效）
+  /puppet/hand_left|right  （F2: finger_1..6；G2: 13 路关节名；仅本节点占串口时有效）
 """
 
 from __future__ import annotations
@@ -29,19 +31,16 @@ if CONTROLLER_DIR not in sys.path:
 if PUBLISHER_DIR not in sys.path:
     sys.path.insert(0, PUBLISHER_DIR)
 
-from inspire_sdk_driver import (  # noqa: E402
-    DEFAULT_FORCE,
-    DEFAULT_MODEL,
-    DEFAULT_SPEED,
-    InspireSdkHand,
+from inspire_sdk_driver import DEFAULT_MODEL, InspireSdkHand  # noqa: E402
+from mapping import (  # noqa: E402
+    angles_to_named_positions,
+    map_named_positions_to_angles,
+    resolve_hand_profile,
 )
-from mapping import CYLINDER_NAMES, FINGER_MAPPINGS, map_named_positions_to_angles  # noqa: E402
 from teleop_state_bridge import hand_registers_to_radians  # noqa: E402
 
 CMD_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
 STATE_QOS = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
-
-PUPPET_HAND_JOINT_NAMES = [f"finger_{i}" for i in range(1, 7)]
 
 
 @dataclass
@@ -58,15 +57,20 @@ class Rh56f2Controller(Node):
     def __init__(self) -> None:
         super().__init__("rh56f2_controller")
 
+        env_model = os.environ.get("IO_HAND_MODEL") or os.environ.get("IO_HANDS") or DEFAULT_MODEL
+        self.declare_parameter("hand_model", env_model)
+        self._profile = resolve_hand_profile(str(self.get_parameter("hand_model").value))
+        io_hand = self._profile.io_hand
+
         self.declare_parameter("right_hand_cmd_topic", "/hand_cmd/right")
         self.declare_parameter("left_hand_cmd_topic", "/hand_cmd/left")
         self.declare_parameter(
             "right_io_topic",
-            "/io_teleop/Inspire_RH56F2/joint_cmd_finger_right",
+            f"/io_teleop/{io_hand}/joint_cmd_finger_right",
         )
         self.declare_parameter(
             "left_io_topic",
-            "/io_teleop/Inspire_RH56F2/joint_cmd_finger_left",
+            f"/io_teleop/{io_hand}/joint_cmd_finger_left",
         )
         self.declare_parameter("right_state_topic", "/puppet/hand_right")
         self.declare_parameter("left_state_topic", "/puppet/hand_left")
@@ -74,14 +78,13 @@ class Rh56f2Controller(Node):
         self.declare_parameter("left_joint_prefix", "left_")
         self.declare_parameter("right_serial_port", "/dev/ttyUSB0")
         self.declare_parameter("left_serial_port", "/dev/ttyUSB1")
-        self.declare_parameter("baud_rate", 115200)
+        self.declare_parameter("baud_rate", self._profile.default_baud)
         self.declare_parameter("right_hand_id", 1)
         self.declare_parameter("left_hand_id", 1)
         self.declare_parameter("enable_right_hand", True)
         self.declare_parameter("enable_left_hand", True)
-        self.declare_parameter("hand_model", DEFAULT_MODEL)
-        self.declare_parameter("hand_force", DEFAULT_FORCE)
-        self.declare_parameter("hand_speed", DEFAULT_SPEED)
+        self.declare_parameter("hand_force", self._profile.default_force)
+        self.declare_parameter("hand_speed", self._profile.default_speed)
         self.declare_parameter("hand_control_hz", 100)
         self.declare_parameter("hand_io_hz", 30)
         self.declare_parameter("log_mapped_positions", False)
@@ -91,14 +94,14 @@ class Rh56f2Controller(Node):
         # 兼容旧参数名
         self.declare_parameter(
             "right_input_topic",
-            "/io_teleop/Inspire_RH56F2/joint_cmd_finger_right",
+            f"/io_teleop/{io_hand}/joint_cmd_finger_right",
         )
         self.declare_parameter(
             "left_input_topic",
-            "/io_teleop/Inspire_RH56F2/joint_cmd_finger_left",
+            f"/io_teleop/{io_hand}/joint_cmd_finger_left",
         )
 
-        model = str(self.get_parameter("hand_model").value)
+        model = self._profile.sdk_model
         force = int(self.get_parameter("hand_force").value)
         speed = int(self.get_parameter("hand_speed").value)
         baud = int(self.get_parameter("baud_rate").value)
@@ -153,6 +156,11 @@ class Rh56f2Controller(Node):
 
         if self._right is None and self._left is None:
             raise RuntimeError("至少需要启用一只手 (enable_right_hand / enable_left_hand)")
+
+        self.get_logger().info(
+            f"手型={self._profile.key} IO={self._profile.io_hand} "
+            f"DOF={self._profile.dof} baud={baud} force={force} speed={speed}"
+        )
 
         if self._publish_state and state_hz > 0.0:
             self.create_timer(1.0 / state_hz, self._on_state_timer)
@@ -213,16 +221,21 @@ class Rh56f2Controller(Node):
         return channel
 
     def _log_mapping(self, label: str, joint_prefix: str) -> None:
-        for idx, mapping in enumerate(FINGER_MAPPINGS):
+        for idx, mapping in enumerate(self._profile.mappings):
             joints = "+".join(f"{joint_prefix}{s}" for s in mapping.joint_suffixes)
             self.get_logger().info(
-                f"[{label}] {CYLINDER_NAMES[idx]} {joints}: "
+                f"[{label}] {self._profile.channel_names[idx]} {joints}: "
                 f"rad [{mapping.rad_sum_lower}, {mapping.rad_sum_upper}] "
                 f"-> angle [{mapping.actuator_at_rad_lower}, {mapping.actuator_at_rad_upper}]"
             )
 
     def _handle_joint_state(self, msg: JointState, channel: HandChannel) -> None:
-        angles = map_named_positions_to_angles(msg.name, msg.position, channel.joint_prefix)
+        angles = map_named_positions_to_angles(
+            msg.name,
+            msg.position,
+            channel.joint_prefix,
+            mappings=self._profile.mappings,
+        )
         if angles is None:
             self.get_logger().warning(f"[{channel.label}] JointState 无效或缺少关节")
             return
@@ -233,7 +246,8 @@ class Rh56f2Controller(Node):
             return
 
         if channel.log_mapped:
-            detail = " | ".join(f"{CYLINDER_NAMES[i]}={angles[i]}" for i in range(6))
+            names = self._profile.channel_names
+            detail = " | ".join(f"{names[i]}={angles[i]}" for i in range(len(angles)))
             self.get_logger().info(f"[{channel.label}] 已下发: {detail}")
 
     def _right_callback(self, msg: JointState) -> None:
@@ -251,9 +265,18 @@ class Rh56f2Controller(Node):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = f"hand_{channel.side}"
-        msg.name = list(PUPPET_HAND_JOINT_NAMES)
-        if angles and len(angles) >= 6:
-            msg.position = hand_registers_to_radians(list(angles[:6]))
+        expected = self._profile.dof
+        msg.name = list(self._profile.state_joint_names)
+        if angles and len(angles) >= expected:
+            if self._profile.key == "rh56f2":
+                msg.position = hand_registers_to_radians(list(angles[:expected]))
+            else:
+                converted = angles_to_named_positions(
+                    list(angles[:expected]),
+                    "",
+                    mappings=self._profile.mappings,
+                )
+                msg.position = list(converted[1]) if converted else []
         else:
             msg.position = []
         channel.state_pub.publish(msg)

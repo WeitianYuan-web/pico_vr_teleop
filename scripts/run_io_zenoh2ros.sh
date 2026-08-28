@@ -7,6 +7,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${PROJECT_DIR}/scripts/io_hand_env.sh"
 IO_ROOT="${PROJECT_DIR}/third_party/io_exotrans2hand"
 BRIDGE="${IO_ROOT}/tools/zenoh2ros_bridge.py"
 ZENOH_SRC="${IO_ROOT}/bundle/python/lib/python3.10/site-packages/zenoh"
@@ -88,10 +90,34 @@ from io_bus_proto.io_bus_codec import proto_to_dict  # noqa: F401
 print("[zenoh2ros] imports ok (rclpy, zenoh, io_bus_codec)")
 PY
 
-# 默认显式订阅 Inspire_RH56F2，避免扫描窗口未等到 tf_hand 时 hands=[]
+cli_model=""
+passthrough=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      cli_model="$2"
+      shift 2
+      ;;
+    --model=*)
+      cli_model="${1#*=}"
+      shift
+      ;;
+    *)
+      passthrough+=("$1")
+      shift
+      ;;
+  esac
+done
+if [[ -n "${cli_model}" ]]; then
+  export IO_HAND_MODEL="$(io_hand_normalize_model "${cli_model}")"
+fi
+set -- "${passthrough[@]+"${passthrough[@]}"}"
+
+# 默认显式订阅手型，避免扫描窗口未等到 tf_hand 时 hands=[]
 HANDS_ARGS=()
 if [[ $# -eq 0 ]]; then
-  HANDS_ARGS=(--hands "${IO_HANDS:-Inspire_RH56F2}")
+  HANDS_ARGS=(--hands "${IO_HANDS:-$(io_hand_io_name)}")
 fi
+echo "[zenoh2ros] hands=${HANDS_ARGS[*]:-<from argv>}"
 
 exec "${PYTHON}" "${BRIDGE}" "${HANDS_ARGS[@]}" "$@"

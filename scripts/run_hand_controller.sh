@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# 统一 RH56F2 手控：订阅 /hand_cmd 与 /io_teleop → 串口；发布 /puppet/hand_*
+# 统一 Inspire 手控：订阅 /hand_cmd 与 /io_teleop → 串口；发布 /puppet/hand_*
+# 手型：--model rh5dg2 或 export IO_HAND_MODEL=rh5dg2（默认 rh56f2）
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${PROJECT_DIR}/scripts/io_hand_env.sh"
 VENV_ACTIVATE="${PROJECT_DIR}/.venv/bin/activate"
 CTRL_PY="${PROJECT_DIR}/controllers/io_hand/rh56f2_controller.py"
 
@@ -34,8 +37,43 @@ fi
 
 cd "${PROJECT_DIR}"
 
+args=()
+cli_model=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model|-model)
+      cli_model="$2"
+      shift 2
+      ;;
+    --model=*|-model=*)
+      cli_model="${1#*=}"
+      shift
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -n "${cli_model}" ]]; then
+  export IO_HAND_MODEL="$(io_hand_normalize_model "${cli_model}")"
+fi
+resolved_model="$(io_hand_resolve_model)"
+export IO_HAND_MODEL="${resolved_model}"
+echo "[hand_controller] model=${resolved_model} io=$(io_hand_io_name "${resolved_model}")"
+
+has_hand_model_param=0
+for a in "${args[@]+"${args[@]}"}"; do
+  if [[ "$a" == hand_model:=* || "$a" == -p=*hand_model:=* || "$a" == --param=*hand_model:=* ]]; then
+    has_hand_model_param=1
+  fi
+done
+if [[ "${has_hand_model_param}" -eq 0 ]]; then
+  args=(-p "hand_model:=${resolved_model}" "${args[@]+"${args[@]}"}")
+fi
+
 # -p / --param 必须挂在 --ros-args 下，否则会被当成 remap（参数不生效）
-args=("$@")
 if [[ ${#args[@]} -gt 0 ]]; then
   has_ros_args=0
   needs_ros_args=0

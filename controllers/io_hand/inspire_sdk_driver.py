@@ -1,10 +1,12 @@
-"""InspireHandSDK_Y 驱动封装，默认 RH56F2。"""
+"""InspireHandSDK_Y 驱动封装，默认 RH56F2；也支持 RH5DG2。"""
 
 from __future__ import annotations
 
 import os
 import sys
 from typing import Any, List, Optional, Sequence
+
+from mapping import resolve_hand_profile
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 INSPIRE_BUILD_PYTHON_DIR = os.path.join(
@@ -46,9 +48,11 @@ class InspireSdkHand:
         force: int = DEFAULT_FORCE,
         speed: int = DEFAULT_SPEED,
     ) -> None:
+        profile = resolve_hand_profile(model)
         self.port = port
         self.hand_id = hand_id
-        self.model = model
+        self.model = profile.sdk_model
+        self.dof = profile.dof
         self.baudrate = baudrate
         self.control_hz = control_hz
         self.io_hz = io_hz
@@ -64,6 +68,12 @@ class InspireSdkHand:
     def connect(self) -> bool:
         if self.dev is not None:
             return True
+        if not os.path.exists(self.port):
+            print(f"[Hand] 串口不存在: {self.port}")
+            return False
+        if not os.access(self.port, os.R_OK | os.W_OK):
+            print(f"[Hand] 无权限读写 {self.port}（需要 dialout/plugdev）")
+            return False
         dev = self._ih.Hand(self.port, self.model)
         ok = dev.connect(
             hand_id=self.hand_id,
@@ -78,6 +88,10 @@ class InspireSdkHand:
                 dev.disconnect()
             except Exception:
                 pass
+            print(
+                f"[Hand] {self.port} 已打开但 {self.model} id={self.hand_id} "
+                f"@{self.baudrate} 无协议应答（查供电 / RS485 接线 / A-B）"
+            )
             return False
         if not dev.start():
             try:
@@ -91,7 +105,7 @@ class InspireSdkHand:
     def submit_angles(self, angles: Sequence[int]) -> bool:
         if self.dev is None:
             return False
-        if len(angles) != 6:
+        if len(angles) != self.dof:
             return False
         return bool(
             self.dev.submit_angles(

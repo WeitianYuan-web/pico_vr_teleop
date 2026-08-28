@@ -1,6 +1,6 @@
 # controllers/io_hand
 
-统一 **RH56F2 手控执行节点**：只占串口、执行指令、发布真实手状态。
+统一 **Inspire 手控执行节点**（默认 RH56F2；可选 RH5DG2）：只占串口、执行指令、发布真实手状态。
 
 指令源（VR / IO）**只发控制数据，不碰串口**。
 
@@ -58,6 +58,24 @@ cmake --build build --target inspire_hand_py
 ./scripts/run_full_stack.sh --backend jaka --no-publisher --no-can-activate
 ```
 
+### IO 手套 + RH5DG2（G2）
+
+三个进程必须同一手型。只接手、不启臂：
+
+```bash
+export IO_HAND_MODEL=rh5dg2   # 或每个脚本加 --model rh5dg2
+
+./scripts/run_io_gateway.sh
+./scripts/run_io_zenoh2ros.sh
+./scripts/run_hand_controller.sh \
+  -p enable_left_hand:=false \
+  -p right_serial_port:=/dev/ttyUSB0
+```
+
+手控用 SDK `rh5dg2`、默认波特率 **921600**（F2 仍是 115200）。需要覆盖时加 `-p baud_rate:=...`。
+
+不要同时跑 `inspire_rh5dg2_teleop_bridge.py` 与 `run_hand_controller.sh`。
+
 ### gateway 串口排除
 
 ```yaml
@@ -66,7 +84,7 @@ probe_exclude_ports:
   - /dev/ttyUSB0
   - /dev/ttyUSB1
 hand_choose:
-  - Inspire_RH56F2
+  - Inspire_RH56F2   # G2 改为 Inspire_RH5DG2
 ```
 
 ## 话题
@@ -74,8 +92,9 @@ hand_choose:
 | 方向 | 话题 | 说明 |
 |------|------|------|
 | 入 | `/hand_cmd/left` `/hand_cmd/right` | VR 等统一指令 |
-| 入 | `/io_teleop/Inspire_RH56F2/joint_cmd_finger_*` | IO 兼容 |
-| 出 | `/puppet/hand_left` `/puppet/hand_right` | 真实状态 `finger_1..6` rad |
+| 入 | `/io_teleop/Inspire_RH56F2/joint_cmd_finger_*` | F2 |
+| 入 | `/io_teleop/Inspire_RH5DG2/joint_cmd_finger_*` | G2 |
+| 出 | `/puppet/hand_left` `/puppet/hand_right` | F2: `finger_1..6`；G2: 13 路关节名 |
 
 Publisher 默认 **不再**从 UDP 发手话题（`publish_hands_from_udp:=false`），避免覆盖本节点。
 
@@ -83,8 +102,8 @@ Publisher 默认 **不再**从 UDP 发手话题（`publish_hands_from_udp:=false
 
 | 文件 | 作用 |
 |------|------|
-| `rh56f2_controller.py` | 统一执行节点 |
-| `mapping.py` | JointState ↔ 6 路寄存器 |
+| `rh56f2_controller.py` | 统一执行节点（`hand_model` 切 F2/G2） |
+| `mapping.py` | JointState ↔ F2 6 路 / G2 13 路 |
 | `inspire_sdk_driver.py` | `inspire_hand_py` 封装 |
 | `vr_trigger_cmd.py` | Trigger alpha → JointState |
 
@@ -92,7 +111,7 @@ Publisher 默认 **不再**从 UDP 发手话题（`publish_hands_from_udp:=false
 
 | 现象 | 处理 |
 |------|------|
-| 手不动且无 `/io_teleop/...` | 重启 zenoh2ros，确认 `hands` 含 Inspire_RH56F2 |
+| 手不动且无 `/io_teleop/...` | 重启 zenoh2ros，确认 `hands` 与 `hand_choose` 同为 F2 或 G2 |
 | VR 与 IO 同时动手乱跳 | Piper 加 `--disable-hands` |
 | `/puppet/hand_*` 被清空 | 确认 publisher 未设 `publish_hands_from_udp:=true` |
 | 抢串口 | 不要用 `--legacy-direct-hand` 与手控同时开 |
