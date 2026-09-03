@@ -38,12 +38,12 @@ usage() {
 
 一键启动:
   1) WebXR HTTPS/WSS 服务 (server.py)
-  2) 遥操作 (backend 可选 piper/jaka/g1/tianyee/noetix)
+  2) 遥操作 (backend 可选 piper/jaka/g1/tianyee/noetix/galbot)
   3) ROS 发布节点 (teleop_realsense_publisher.py)
 
 选项:
   --no-can-activate     跳过 can0/can1 自动激活
-  --backend <name>      选择遥操作后端: piper | jaka | g1 | tianyee | noetix（默认 piper）
+  --backend <name>      选择遥操作后端: piper | jaka | g1 | tianyee | noetix | galbot（默认 piper）
   --no-vr-server        不启动 WebXR 服务
   --no-teleop           不启动遥操作
   --no-publisher        不启动 ROS 发布节点
@@ -66,10 +66,12 @@ usage() {
   $(basename "$0") --backend piper -- --disable-hands
   $(basename "$0") --backend tianyee --no-can-activate --no-publisher
   $(basename "$0") --backend noetix --no-can-activate
+  $(basename "$0") --backend galbot --no-can-activate
   ROS_ARGS="-p camera_f_serial:=xxxx" $(basename "$0")
 
 手串口由 ./scripts/run_hand_controller.sh 独占；Piper Trigger 默认只发 /hand_cmd。
 Noetix 遥操作走 CycloneDDS（本机 192.168.127.40），publisher 仍用本机 Domain 隔离。
+Galbot（Galaxy G1，不是 Unitree g1）遥操作走 Embosa，同样不套 Domain 42/FastDDS。
 EOF
 }
 
@@ -115,8 +117,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" && "${BACKEND}" != "tianyee" && "${BACKEND}" != "noetix" ]]; then
-  echo "[错误] --backend 仅支持 piper / jaka / g1 / tianyee / noetix，当前: ${BACKEND}"
+if [[ "${BACKEND}" != "piper" && "${BACKEND}" != "jaka" && "${BACKEND}" != "g1" && "${BACKEND}" != "tianyee" && "${BACKEND}" != "noetix" && "${BACKEND}" != "galbot" ]]; then
+  echo "[错误] --backend 仅支持 piper / jaka / g1 / tianyee / noetix / galbot，当前: ${BACKEND}"
   exit 1
 fi
 
@@ -126,7 +128,50 @@ if [[ ! -x "${VENV_PYTHON}" || ! -f "${VENV_ACTIVATE}" ]]; then
   exit 1
 fi
 
+strip_galbot_from_env() {
+  # Galbot install.sh 会把 setup.sh 写进 ~/.bashrc，把自家 FastCDR/FastDDS
+  # 插到 LD_LIBRARY_PATH 最前。那套 ABI 和 ROS Jazzy 的 rmw_fastrtps 不兼容，
+  # publisher 会在 serializeEj 上直接 symbol lookup error。
+  # 遥操作 galbot 子进程走 run_vr_teleop_galbot.sh，仍会单独 source SDK。
+  local -a keep=()
+  local p
+  if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+    IFS=':' read -r -a parts <<< "${LD_LIBRARY_PATH}"
+    for p in "${parts[@]}"; do
+      [[ -z "${p}" ]] && continue
+      case "${p}" in
+        */galbot/*|*/galbot-*|*/GalbotSDK*) continue ;;
+      esac
+      keep+=("${p}")
+    done
+    if [[ ${#keep[@]} -gt 0 ]]; then
+      local IFS=':'
+      export LD_LIBRARY_PATH="${keep[*]}"
+    else
+      unset LD_LIBRARY_PATH || true
+    fi
+  fi
+  keep=()
+  if [[ -n "${PYTHONPATH:-}" ]]; then
+    IFS=':' read -r -a parts <<< "${PYTHONPATH}"
+    for p in "${parts[@]}"; do
+      [[ -z "${p}" ]] && continue
+      case "${p}" in
+        */galbot/*|*/galbot-*|*/GalbotSDK*) continue ;;
+      esac
+      keep+=("${p}")
+    done
+    if [[ ${#keep[@]} -gt 0 ]]; then
+      local IFS=':'
+      export PYTHONPATH="${keep[*]}"
+    else
+      unset PYTHONPATH || true
+    fi
+  fi
+}
+
 activate_runtime_env() {
+  strip_galbot_from_env
   # ROS setup.bash 在 set -u 下可能引用未定义变量，需临时关闭
   set +u
   if [[ -n "${ROS_SETUP}" && -f "${ROS_SETUP}" ]]; then
@@ -276,6 +321,8 @@ if [[ "${LOCAL_ROS_ISOLATION}" == "1" ]]; then
     echo "[Launcher] 本机 ROS 隔离: Domain ${LOCAL_ROS_DOMAIN_ID} + loopback/SHM（机器人 Domain 0）"
   elif [[ "${BACKEND}" == "noetix" ]]; then
     echo "[Launcher] publisher 本机 Domain ${LOCAL_ROS_DOMAIN_ID}；遥操作单独 CycloneDDS → 192.168.127.20"
+  elif [[ "${BACKEND}" == "galbot" ]]; then
+    echo "[Launcher] publisher 本机 Domain ${LOCAL_ROS_DOMAIN_ID}；遥操作单独 Embosa（Galbot G1，非 Unitree g1）"
   else
     echo "[Launcher] 本机 ROS Domain ${LOCAL_ROS_DOMAIN_ID}（与常见机上 Domain 0 隔离）"
   fi
@@ -289,6 +336,15 @@ if [[ "${BACKEND}" == "noetix" ]]; then
   if [[ ! -f "${CARTESIAN_WS}/install/setup.bash" ]]; then
     echo "[错误] Noetix 需要已编译的 ${CARTESIAN_WS}/install/setup.bash"
     exit 1
+  fi
+fi
+
+if [[ "${BACKEND}" == "galbot" ]]; then
+  if ! ip -4 -o addr 2>/dev/null | grep -q "192.168.1.99"; then
+    echo "[Launcher] 警告: 未检测到本机 IP 192.168.1.99（Galbot Embosa 默认 PC 地址）"
+  fi
+  if [[ ! -f /data/config/embosa_ip_config.json ]]; then
+    echo "[Launcher] 警告: 未找到 /data/config/embosa_ip_config.json（GalbotRobot.init 通常需要它）"
   fi
 fi
 
@@ -336,6 +392,8 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/tianyee_dual_webxr.py"
   elif [[ "${BACKEND}" == "noetix" ]]; then
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/noetix_dual_webxr.py"
+  elif [[ "${BACKEND}" == "galbot" ]]; then
+    TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/galbot_dual_webxr.py"
   else
     TELEOP_ENTRY="${PROJECT_DIR}/entrypoints/piper_dual_webxr.py"
   fi
@@ -349,6 +407,9 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
     fi
   elif [[ "${BACKEND}" == "noetix" ]]; then
     echo "[Launcher] Noetix：遥操作 CycloneDDS 直连机器人（跳过 Domain ${LOCAL_ROS_DOMAIN_ID}/FastDDS）"
+  elif [[ "${BACKEND}" == "galbot" ]]; then
+    echo "[Launcher] Galbot：遥操作 Embosa 直连机器人（跳过 Domain ${LOCAL_ROS_DOMAIN_ID}/FastDDS）"
+    echo "[Launcher] 这是 Galaxy Galbot G1，不是 Unitree g1"
   fi
   echo "[Launcher] 启动遥操作（前台）: ${TELEOP_ENTRY} ${TELEOP_ARGS[*]:-}"
   echo "[Launcher] 状态默认上报 UDP 127.0.0.1:17981 -> publisher"
@@ -377,6 +438,12 @@ if [[ "${DO_TELEOP}" -eq 1 ]]; then
       fi
       export PYTHONPATH="${PROJECT_DIR}:${PROJECT_DIR}/backends/noetix:${PYTHONPATH:-}"
       echo "[Launcher] Noetix teleop RMW=${RMW_IMPLEMENTATION} CYCLONEDDS_URI=${CYCLONEDDS_URI:-<unset>}"
+      cd "${PROJECT_DIR}"
+      exec python "${TELEOP_ENTRY}" "${TELEOP_ARGS[@]}"
+    elif [[ "${BACKEND}" == "galbot" ]]; then
+      # Embosa 自带 FastDDS；复用独立 launcher，避免 Domain42 isolation。
+      cd "${PROJECT_DIR}"
+      exec "${PROJECT_DIR}/scripts/run_vr_teleop_galbot.sh" "${TELEOP_ARGS[@]}"
     else
       activate_runtime_env
       if [[ "${BACKEND}" == "jaka" ]]; then

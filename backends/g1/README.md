@@ -2,6 +2,8 @@
 
 Unitree G1 双臂 WebXR 遥操作（DDS + Placo QP IK）。
 
+与 Galaxy **Galbot G1** 不是同一机型。Galbot 请用 `--backend galbot`，见 [backends/galbot/README.md](../galbot/README.md)。
+
 ## 布局
 
 ```

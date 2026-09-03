@@ -9,6 +9,7 @@
 | `g1_dual_webxr.py` | `backends/g1/vr_teleop_dual.py` |
 | `tianyee_dual_webxr.py` | `backends/tianyee/vr_teleop_dual.py` |
 | `noetix_dual_webxr.py` | `backends/noetix/vr_teleop_dual.py` |
+| `galbot_dual_webxr.py` | `backends/galbot/vr_teleop_dual.py` |
 
 约定：
 
@@ -16,4 +17,4 @@
 - 机型实现留在 `backends/<robot>/`
 - 共用数学 / clutch / WSS 在 `common/`
 - 厂商 SDK 在 `third_party/` 或本机厂商目录
-- 一键启动：`./scripts/run_full_stack.sh --backend piper|jaka|g1|tianyee|noetix`
+- 一键启动：`./scripts/run_full_stack.sh --backend piper|jaka|g1|tianyee|noetix|galbot`

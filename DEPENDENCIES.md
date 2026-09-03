@@ -42,6 +42,26 @@ pip install -e ./unitree_sdk2_python
 # 或：export UNITREE_SDK2_PYTHON=/path/to/unitree_sdk2_python
 ```
 
+### Galbot（Galaxy G1，`--backend galbot`）
+
+与上面的 Unitree G1 **不是**同一套。SDK 体积大，不入库。
+
+| 组件 | 随仓？ | 操作 |
+|------|--------|------|
+| `third_party/GalbotSDK-V1.7.3` | 否 | GBS **1.15.x** 用 SDK **1.7.3** |
+| `third_party/GalbotSDK-main` | 否 | GBS 1.17 才用 SDK 1.9.1 |
+| `/opt/galbot-1.7.3` native 依赖 | 否 | `sudo ./install.sh --install-dir /opt/galbot-1.7.3 -y` |
+| `/data/config/embosa_ip_config.json` | 否 | `sudo ./configure_embosa_ip.sh`（`cp -n` 不覆盖已有） |
+
+本机机器人当前是 GBS 1.15.15，**不要用 1.9**（init 能过、关节/EE 会空）。WBC 流式末端从 SDK 1.8 才有。
+
+```bash
+# 默认 PC 192.168.1.99 ↔ XCU 192.168.1.66 / HPU 192.168.1.88
+./scripts/run_full_stack.sh --backend galbot
+```
+
+详见 [backends/galbot/README.md](backends/galbot/README.md)。
+
 ### IO Gesture（外骨骼控手，与 VR 臂共存）
 
 | 组件 | 随仓？ | 操作 |
@@ -75,6 +95,9 @@ python -c "from pyAgxArm import AgxArmFactory; print('piper ok')"
 # JAKA 厂商库路径（存在即路径对）
 ls "backends/jaka/20260104145805A007/SDK V2.3.1_beta3/Linux/x86_64-linux-gnu/Linux/python3/x86_64-linux-gnu/libjakaAPI.so"
 
-# G1
+# G1（Unitree）
 python -c "from unitree_sdk2py.core.channel import ChannelFactoryInitialize; print('g1 sdk ok')"
+
+# Galbot（需先 source /opt/galbot/.../setup.sh）
+python -c "from galbot_sdk.g1 import GalbotRobot; print('galbot sdk ok')"
 ```
